@@ -589,6 +589,15 @@ private struct SettingsView: View {
     @AppStorage("aiProvider") private var aiProviderRaw = AIProvider.anthropic.rawValue
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+    @AppStorage("userSex") private var userSex = UserSex.preferNotToSay.rawValue
+    @AppStorage("userAge") private var userAge = ""
+    @AppStorage("userHeightCm") private var userHeightCm = ""
+    @AppStorage("userWeightKg") private var userWeightKg = ""
+    @AppStorage("ckdStage") private var ckdStageRaw = CKDStage.notSpecified.rawValue
+    @AppStorage("proteinTargetG") private var proteinTargetG = ""
+    @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
+    @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
+    @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
 
     @State private var showAnthropicKey = false
     @State private var showGeminiKey = false
@@ -608,6 +617,10 @@ private struct SettingsView: View {
 
     private var selectedProvider: AIProvider {
         AIProvider(rawValue: aiProviderRaw) ?? .anthropic
+    }
+
+    private var selectedCKDStage: CKDStage {
+        CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
     }
 
     var body: some View {
@@ -763,6 +776,53 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Profile") {
+                    Picker("Sex", selection: $userSex) {
+                        ForEach(UserSex.allCases) { sex in
+                            Text(sex.rawValue).tag(sex.rawValue)
+                        }
+                    }
+
+                    TextField("Age", text: $userAge)
+                        .keyboardType(.numberPad)
+                    TextField("Height (cm)", text: $userHeightCm)
+                        .keyboardType(.decimalPad)
+                    TextField("Weight (kg)", text: $userWeightKg)
+                        .keyboardType(.decimalPad)
+
+                    Picker("CKD Stage", selection: $ckdStageRaw) {
+                        ForEach(CKDStage.allCases) { stage in
+                            Text(stage.displayName).tag(stage.rawValue)
+                        }
+                    }
+
+                    Text("These profile details are stored for context. Kidney sodium, potassium, and phosphorus targets are usually based more on CKD stage, lab results, dialysis status, and clinician guidance than on age, sex, height, or weight alone.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Daily Targets") {
+                    TextField("Protein target (g/day)", text: $proteinTargetG)
+                        .keyboardType(.decimalPad)
+                    TextField("Sodium target (mg/day)", text: $sodiumTargetMg)
+                        .keyboardType(.numberPad)
+                    TextField("Potassium target (mg/day)", text: $potassiumTargetMg)
+                        .keyboardType(.numberPad)
+                    TextField("Phosphorus target (mg/day)", text: $phosphorusTargetMg)
+                        .keyboardType(.numberPad)
+
+                    Button("Reset Targets To Recommended Defaults") {
+                        proteinTargetG = recommendedProteinTargetText
+                        sodiumTargetMg = String(Int(RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled)))
+                        potassiumTargetMg = kidneyChecksEnabled ? String(Int(RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage))) : ""
+                        phosphorusTargetMg = kidneyChecksEnabled ? String(Int(RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage))) : ""
+                    }
+
+                    Text(recommendedTargetSummary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("About This App") {
                     Label("MealVue food logging with photo capture", systemImage: "camera.fill")
                     Label("Manual and AI-assisted nutrition entry", systemImage: "square.and.pencil")
@@ -886,6 +946,28 @@ private struct SettingsView: View {
             openAIError = error.localizedDescription
         }
     }
+
+    private var recommendedTargetSummary: String {
+        var parts: [String] = [
+            "Suggested protein target: \(recommendedProteinTargetText) g/day.",
+            "Suggested sodium target: \(Int(RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled))) mg/day."
+        ]
+
+        if kidneyChecksEnabled {
+            parts.append("Suggested potassium target: \(Int(RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage))) mg/day.")
+            parts.append("Suggested phosphorus target: \(Int(RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage))) mg/day.")
+        } else {
+            parts.append("Potassium and phosphorus are tracked, but no kidney-specific limit is applied unless you enter one or turn on the kidney checker.")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    private var recommendedProteinTargetText: String {
+        let weight = Double(userWeightKg.trimmingCharacters(in: .whitespacesAndNewlines))
+        let grams = RecommendedTargets.defaultProteinG(for: selectedCKDStage, weightKg: weight)
+        return String(Int(grams.rounded()))
+    }
 }
 
 private enum SettingsField: Hashable {
@@ -893,6 +975,27 @@ private enum SettingsField: Hashable {
     case geminiKey
     case openAIKey
     case openRouterKey
+}
+
+private enum UserSex: String, CaseIterable, Identifiable {
+    case female = "Female"
+    case male = "Male"
+    case intersex = "Intersex"
+    case preferNotToSay = "Prefer Not To Say"
+
+    var id: String { rawValue }
+}
+
+private enum CKDStage: String, CaseIterable, Identifiable {
+    case notSpecified = "Not Specified"
+    case stage1to2 = "Stages 1-2"
+    case stage3to4 = "Stages 3-4"
+    case stage5NotDialysis = "Stage 5 Not On Dialysis"
+    case dialysis = "Dialysis"
+
+    var id: String { rawValue }
+
+    var displayName: String { rawValue }
 }
 
 private struct APIKeyField: View {
@@ -1001,6 +1104,9 @@ private struct FoodEntryDetailView: View {
                 detailRow("Carbs", value: "\(Int(entry.carbsG)) g")
                 detailRow("Fat", value: "\(Int(entry.fatG)) g")
                 detailRow("Fiber", value: "\(Int(entry.fiberG)) g")
+                detailRow("Sodium", value: "\(Int(entry.sodiumMg)) mg")
+                detailRow("Potassium", value: "\(Int(entry.potassiumMg)) mg")
+                detailRow("Phosphorus", value: "\(Int(entry.phosphorusMg)) mg")
             }
 
             Section("Health Notes") {
@@ -1052,9 +1158,15 @@ private struct PhotoAnalysisView: View {
     @State private var carbs = ""
     @State private var fat = ""
     @State private var fiber = ""
+    @State private var sodium = ""
+    @State private var potassium = ""
+    @State private var phosphorus = ""
     @State private var notes = ""
     @State private var kidneyWarning = ""
     @State private var heartWarning = ""
+    @State private var sodiumWarning = ""
+    @State private var potassiumWarning = ""
+    @State private var phosphorusWarning = ""
     @State private var confidence = "manual"
     @State private var modelUsed = ""
     @State private var providerUsed = ""
@@ -1102,6 +1214,21 @@ private struct PhotoAnalysisView: View {
                                 .padding(.horizontal)
                         }
 
+                        if (kidneyChecksEnabled || heartChecksEnabled) && !sodiumWarning.isEmpty {
+                            WarningCard(message: sodiumWarning, tint: .orange)
+                                .padding(.horizontal)
+                        }
+
+                        if (kidneyChecksEnabled || heartChecksEnabled) && !potassiumWarning.isEmpty {
+                            WarningCard(message: potassiumWarning, tint: .yellow)
+                                .padding(.horizontal)
+                        }
+
+                        if (kidneyChecksEnabled || heartChecksEnabled) && !phosphorusWarning.isEmpty {
+                            WarningCard(message: phosphorusWarning, tint: .purple)
+                                .padding(.horizontal)
+                        }
+
                         if !modelUsed.isEmpty {
                             ModelInfoCard(provider: providerUsed, model: modelUsed, confidence: confidence)
                                 .padding(.horizontal)
@@ -1115,6 +1242,9 @@ private struct PhotoAnalysisView: View {
                             carbs: $carbs,
                             fat: $fat,
                             fiber: $fiber,
+                            sodium: $sodium,
+                            potassium: $potassium,
+                            phosphorus: $phosphorus,
                             notes: $notes
                         )
                     case .error(let message):
@@ -1165,9 +1295,15 @@ private struct PhotoAnalysisView: View {
         carbs = format(result.carbsG)
         fat = format(result.fatG)
         fiber = format(result.fiberG)
+        sodium = format(result.sodiumMg)
+        potassium = format(result.potassiumMg)
+        phosphorus = format(result.phosphorusMg)
         notes = result.notes
         kidneyWarning = Config.kidneyChecksEnabled ? result.kidneyWarning : ""
         heartWarning = Config.heartChecksEnabled ? result.heartWarning : ""
+        sodiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.sodiumWarning : ""
+        potassiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.potassiumWarning : ""
+        phosphorusWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.phosphorusWarning : ""
         confidence = result.confidence
         modelUsed = result.modelUsed
         providerUsed = result.providerName
@@ -1182,12 +1318,18 @@ private struct PhotoAnalysisView: View {
             carbsG: Double(carbs) ?? 0,
             fatG: Double(fat) ?? 0,
             fiberG: Double(fiber) ?? 0,
+            sodiumMg: Double(sodium) ?? 0,
+            potassiumMg: Double(potassium) ?? 0,
+            phosphorusMg: Double(phosphorus) ?? 0,
             notes: "",
             kidneyWarning: kidneyChecksEnabled ? kidneyWarning.trimmingCharacters(in: .whitespacesAndNewlines) : "",
             confidence: confidence,
             aiNotes: combinedAINotes(
                 baseNotes: notes,
                 heartWarning: heartChecksEnabled ? heartWarning : "",
+                sodiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? sodiumWarning : "",
+                potassiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? potassiumWarning : "",
+                phosphorusWarning: (kidneyChecksEnabled || heartChecksEnabled) ? phosphorusWarning : "",
                 provider: providerUsed,
                 model: modelUsed
             ),
@@ -1216,9 +1358,15 @@ private struct TextAnalysisEntryView: View {
     @State private var carbs = ""
     @State private var fat = ""
     @State private var fiber = ""
+    @State private var sodium = ""
+    @State private var potassium = ""
+    @State private var phosphorus = ""
     @State private var notes = ""
     @State private var kidneyWarning = ""
     @State private var heartWarning = ""
+    @State private var sodiumWarning = ""
+    @State private var potassiumWarning = ""
+    @State private var phosphorusWarning = ""
     @State private var confidence = "manual"
     @State private var modelUsed = ""
     @State private var providerUsed = ""
@@ -1267,6 +1415,21 @@ private struct TextAnalysisEntryView: View {
                                     .padding(.horizontal)
                             }
 
+                            if (kidneyChecksEnabled || heartChecksEnabled) && !sodiumWarning.isEmpty {
+                                WarningCard(message: sodiumWarning, tint: .orange)
+                                    .padding(.horizontal)
+                            }
+
+                            if (kidneyChecksEnabled || heartChecksEnabled) && !potassiumWarning.isEmpty {
+                                WarningCard(message: potassiumWarning, tint: .yellow)
+                                    .padding(.horizontal)
+                            }
+
+                            if (kidneyChecksEnabled || heartChecksEnabled) && !phosphorusWarning.isEmpty {
+                                WarningCard(message: phosphorusWarning, tint: .purple)
+                                    .padding(.horizontal)
+                            }
+
                             if !modelUsed.isEmpty {
                                 ModelInfoCard(provider: providerUsed, model: modelUsed, confidence: confidence)
                                     .padding(.horizontal)
@@ -1280,6 +1443,9 @@ private struct TextAnalysisEntryView: View {
                                 carbs: $carbs,
                                 fat: $fat,
                                 fiber: $fiber,
+                                sodium: $sodium,
+                                potassium: $potassium,
+                                phosphorus: $phosphorus,
                                 notes: $notes
                             )
 
@@ -1320,9 +1486,15 @@ private struct TextAnalysisEntryView: View {
             carbs = format(result.carbsG)
             fat = format(result.fatG)
             fiber = format(result.fiberG)
+            sodium = format(result.sodiumMg)
+            potassium = format(result.potassiumMg)
+            phosphorus = format(result.phosphorusMg)
             notes = result.notes
             kidneyWarning = Config.kidneyChecksEnabled ? result.kidneyWarning : ""
             heartWarning = Config.heartChecksEnabled ? result.heartWarning : ""
+            sodiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.sodiumWarning : ""
+            potassiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.potassiumWarning : ""
+            phosphorusWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.phosphorusWarning : ""
             confidence = result.confidence
             modelUsed = result.modelUsed
             providerUsed = result.providerName
@@ -1341,12 +1513,18 @@ private struct TextAnalysisEntryView: View {
             carbsG: Double(carbs) ?? 0,
             fatG: Double(fat) ?? 0,
             fiberG: Double(fiber) ?? 0,
+            sodiumMg: Double(sodium) ?? 0,
+            potassiumMg: Double(potassium) ?? 0,
+            phosphorusMg: Double(phosphorus) ?? 0,
             notes: "",
             kidneyWarning: kidneyChecksEnabled ? kidneyWarning.trimmingCharacters(in: .whitespacesAndNewlines) : "",
             confidence: confidence,
             aiNotes: combinedAINotes(
                 baseNotes: notes,
                 heartWarning: heartChecksEnabled ? heartWarning : "",
+                sodiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? sodiumWarning : "",
+                potassiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? potassiumWarning : "",
+                phosphorusWarning: (kidneyChecksEnabled || heartChecksEnabled) ? phosphorusWarning : "",
                 provider: providerUsed,
                 model: modelUsed
             ),
@@ -1366,6 +1544,9 @@ private struct MealEditor: View {
     @Binding var carbs: String
     @Binding var fat: String
     @Binding var fiber: String
+    @Binding var sodium: String
+    @Binding var potassium: String
+    @Binding var phosphorus: String
     @Binding var notes: String
 
     var body: some View {
@@ -1387,6 +1568,10 @@ private struct MealEditor: View {
                     numericRow("Carbs", text: $carbs, unit: "g")
                     numericRow("Fat", text: $fat, unit: "g")
                     numericRow("Fiber", text: $fiber, unit: "g")
+                    Divider()
+                    numericRow("Sodium", text: $sodium, unit: "mg")
+                    numericRow("Potassium", text: $potassium, unit: "mg")
+                    numericRow("Phosphorus", text: $phosphorus, unit: "mg")
                 }
             }
             .padding(.horizontal)
@@ -1426,7 +1611,39 @@ private struct MealEditor: View {
 }
 
 private struct TotalsCard: View {
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+    @AppStorage("ckdStage") private var ckdStageRaw = CKDStage.notSpecified.rawValue
+    @AppStorage("userWeightKg") private var userWeightKg = ""
+    @AppStorage("proteinTargetG") private var proteinTargetG = ""
+    @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
+    @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
+    @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
+
     let totals: NutritionTotals
+
+    private var sodiumThreshold: Double {
+        parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled)
+    }
+
+    private var proteinThreshold: Double {
+        parsedTarget(proteinTargetG) ?? RecommendedTargets.defaultProteinG(
+            for: selectedCKDStage,
+            weightKg: Double(userWeightKg.trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+    }
+
+    private var potassiumThreshold: Double? {
+        parsedTarget(potassiumTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage) : nil)
+    }
+
+    private var phosphorusThreshold: Double? {
+        parsedTarget(phosphorusTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage) : nil)
+    }
+
+    private var selectedCKDStage: CKDStage {
+        CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1449,8 +1666,104 @@ private struct TotalsCard: View {
                 MacroSummaryCard(title: "Fat", value: totals.fatG, tint: .orange)
                 MacroSummaryCard(title: "Fiber", value: totals.fiberG, tint: .purple)
             }
+
+            ProteinTargetRow(
+                value: totals.proteinG,
+                threshold: proteinThreshold
+            )
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Daily Mineral Totals")
+                    .font(.headline)
+
+                MineralTotalRow(
+                    title: "Sodium",
+                    value: totals.sodiumMg,
+                    threshold: sodiumThreshold,
+                    note: "Target \(Int(sodiumThreshold)) mg/day"
+                )
+
+                MineralTotalRow(
+                    title: "Potassium",
+                    value: totals.potassiumMg,
+                    threshold: potassiumThreshold,
+                    note: potassiumThreshold == nil ? "Tracking only" : "Target \(Int(potassiumThreshold ?? 0)) mg/day"
+                )
+
+                MineralTotalRow(
+                    title: "Phosphorus",
+                    value: totals.phosphorusMg,
+                    threshold: phosphorusThreshold,
+                    note: phosphorusThreshold == nil ? "Tracking only" : "Target \(Int(phosphorusThreshold ?? 0)) mg/day"
+                )
+            }
         }
         .padding(.vertical, 8)
+    }
+
+    private func parsedTarget(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Double(trimmed)
+    }
+}
+
+private struct MineralTotalRow: View {
+    let title: String
+    let value: Double
+    let threshold: Double?
+    let note: String
+
+    private var isHigh: Bool {
+        guard let threshold else { return false }
+        return value > threshold
+    }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text("\(Int(value)) mg")
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .foregroundStyle(isHigh ? .red : .primary)
+        }
+    }
+}
+
+private struct ProteinTargetRow: View {
+    let value: Double
+    let threshold: Double
+
+    private var isHigh: Bool {
+        value > threshold
+    }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Protein")
+                    .font(.subheadline.weight(.semibold))
+                Text("Target \(Int(threshold)) g/day")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text("\(Int(value)) g")
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .foregroundStyle(isHigh ? .red : .primary)
+        }
     }
 }
 
@@ -1579,7 +1892,15 @@ private struct ModelInfoCard: View {
     }
 }
 
-private func combinedAINotes(baseNotes: String, heartWarning: String, provider: String, model: String) -> String {
+private func combinedAINotes(
+    baseNotes: String,
+    heartWarning: String,
+    sodiumWarning: String,
+    potassiumWarning: String,
+    phosphorusWarning: String,
+    provider: String,
+    model: String
+) -> String {
     var parts: [String] = []
 
     let trimmedNotes = baseNotes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1590,6 +1911,21 @@ private func combinedAINotes(baseNotes: String, heartWarning: String, provider: 
     let trimmedHeartWarning = heartWarning.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedHeartWarning.isEmpty {
         parts.append("Heart warning: \(trimmedHeartWarning)")
+    }
+
+    let trimmedSodiumWarning = sodiumWarning.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedSodiumWarning.isEmpty {
+        parts.append("Salt warning: \(trimmedSodiumWarning)")
+    }
+
+    let trimmedPotassiumWarning = potassiumWarning.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedPotassiumWarning.isEmpty {
+        parts.append("Potassium warning: \(trimmedPotassiumWarning)")
+    }
+
+    let trimmedPhosphorusWarning = phosphorusWarning.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedPhosphorusWarning.isEmpty {
+        parts.append("Phosphorus warning: \(trimmedPhosphorusWarning)")
     }
 
     if !provider.isEmpty || !model.isEmpty {
@@ -1667,6 +2003,9 @@ private struct NutritionTotals {
     let carbsG: Double
     let fatG: Double
     let fiberG: Double
+    let sodiumMg: Double
+    let potassiumMg: Double
+    let phosphorusMg: Double
     let entriesCount: Int
 
     init(entries: [FoodEntry]) {
@@ -1675,7 +2014,47 @@ private struct NutritionTotals {
         carbsG = entries.reduce(0) { $0 + $1.carbsG }
         fatG = entries.reduce(0) { $0 + $1.fatG }
         fiberG = entries.reduce(0) { $0 + $1.fiberG }
+        sodiumMg = entries.reduce(0) { $0 + $1.sodiumMg }
+        potassiumMg = entries.reduce(0) { $0 + $1.potassiumMg }
+        phosphorusMg = entries.reduce(0) { $0 + $1.phosphorusMg }
         entriesCount = entries.count
+    }
+}
+
+private enum RecommendedTargets {
+    static func defaultSodiumMg(heartChecksEnabled: Bool) -> Double {
+        heartChecksEnabled ? 1500 : 2300
+    }
+
+    static func defaultProteinG(for stage: CKDStage, weightKg: Double?) -> Double {
+        let safeWeight = max(weightKg ?? 70, 35)
+
+        switch stage {
+        case .notSpecified, .stage1to2:
+            return safeWeight * 0.8
+        case .stage3to4, .stage5NotDialysis:
+            return safeWeight * 0.7
+        case .dialysis:
+            return safeWeight * 1.2
+        }
+    }
+
+    static func defaultPotassiumMg(for stage: CKDStage) -> Double {
+        switch stage {
+        case .notSpecified, .stage1to2:
+            return 4700
+        case .stage3to4, .stage5NotDialysis, .dialysis:
+            return 3000
+        }
+    }
+
+    static func defaultPhosphorusMg(for stage: CKDStage) -> Double {
+        switch stage {
+        case .notSpecified, .stage1to2:
+            return 1000
+        case .stage3to4, .stage5NotDialysis, .dialysis:
+            return 800
+        }
     }
 }
 
@@ -1752,10 +2131,16 @@ private struct NutritionResult {
     let carbsG: Double
     let fatG: Double
     let fiberG: Double
+    let sodiumMg: Double
+    let potassiumMg: Double
+    let phosphorusMg: Double
     let confidence: String
     let notes: String
     let kidneyWarning: String
     let heartWarning: String
+    let sodiumWarning: String
+    let potassiumWarning: String
+    let phosphorusWarning: String
     let providerName: String
     let modelUsed: String
 }
@@ -2511,6 +2896,20 @@ private enum ClaudeService {
             return 0
         }
 
+        func normalizedWarning(_ key: String) -> String {
+            let raw = (json[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return "" }
+
+            let lowered = raw.lowercased()
+
+            // Suppress non-actionable warnings when the model only indicates a moderate amount.
+            if lowered.contains("moderate") || lowered.contains("medium") {
+                return ""
+            }
+
+            return raw
+        }
+
         return NutritionResult(
             foodName: json["food_name"] as? String ?? "Unknown food",
             estimatedQuantity: json["estimated_quantity"] as? String ?? "",
@@ -2519,10 +2918,16 @@ private enum ClaudeService {
             carbsG: double("carbs_g"),
             fatG: double("fat_g"),
             fiberG: double("fiber_g"),
+            sodiumMg: double("sodium_mg"),
+            potassiumMg: double("potassium_mg"),
+            phosphorusMg: double("phosphorus_mg"),
             confidence: json["confidence"] as? String ?? "medium",
             notes: json["notes"] as? String ?? "",
-            kidneyWarning: json["kidney_warning"] as? String ?? "",
-            heartWarning: json["heart_warning"] as? String ?? "",
+            kidneyWarning: normalizedWarning("kidney_warning"),
+            heartWarning: normalizedWarning("heart_warning"),
+            sodiumWarning: normalizedWarning("sodium_warning"),
+            potassiumWarning: normalizedWarning("potassium_warning"),
+            phosphorusWarning: normalizedWarning("phosphorus_warning"),
             providerName: providerName,
             modelUsed: modelUsed
         )
@@ -2540,10 +2945,16 @@ private enum ClaudeService {
       "carbs_g": 45.0,
       "fat_g": 14.0,
       "fiber_g": 3.0,
+      "sodium_mg": 950,
+      "potassium_mg": 540,
+      "phosphorus_mg": 320,
       "confidence": "high",
       "notes": "brief note on assumptions or portion estimate",
       "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string",
-      "heart_warning": "brief warning for someone focused on heart health, otherwise empty string"
+      "heart_warning": "brief warning for someone focused on heart health, otherwise empty string",
+      "sodium_warning": "brief warning if salt/sodium appears too high, otherwise empty string",
+      "potassium_warning": "brief warning if potassium appears too high, otherwise empty string",
+      "phosphorus_warning": "brief warning if phosphorus appears too high, otherwise empty string"
     }
 
     \(healthWarningRules)
@@ -2564,10 +2975,16 @@ private enum ClaudeService {
           "carbs_g": 45.0,
           "fat_g": 14.0,
           "fiber_g": 3.0,
+          "sodium_mg": 950,
+          "potassium_mg": 540,
+          "phosphorus_mg": 320,
           "confidence": "medium",
           "notes": "brief note on assumptions or portion estimate",
           "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string",
-          "heart_warning": "brief warning for someone focused on heart health, otherwise empty string"
+          "heart_warning": "brief warning for someone focused on heart health, otherwise empty string",
+          "sodium_warning": "brief warning if salt/sodium appears too high, otherwise empty string",
+          "potassium_warning": "brief warning if potassium appears too high, otherwise empty string",
+          "phosphorus_warning": "brief warning if phosphorus appears too high, otherwise empty string"
         }
 
         \(healthWarningRules)
@@ -2577,7 +2994,8 @@ private enum ClaudeService {
     private static var healthWarningRules: String {
         var rules: [String] = [
             "- All numeric fields must be numbers, not strings",
-            "- calories must be an integer"
+            "- calories must be an integer",
+            "- Estimate sodium_mg, potassium_mg, and phosphorus_mg as daily nutrient amounts for this meal in milligrams"
         ]
 
         if Config.kidneyChecksEnabled {
@@ -2590,6 +3008,14 @@ private enum ClaudeService {
             rules.append("- If the food appears risky for heart health because it is high in sodium, saturated fat, trans fat, or heavily processed, set heart_warning to a short warning. Otherwise set heart_warning to an empty string.")
         } else {
             rules.append("- Set heart_warning to an empty string.")
+        }
+
+        if Config.kidneyChecksEnabled || Config.heartChecksEnabled {
+            rules.append("- Only set sodium_warning when sodium is clearly high for the meal. Do not warn for moderate or borderline sodium. Otherwise set sodium_warning to an empty string.")
+            rules.append("- Only set potassium_warning when potassium is clearly high for the meal. Do not warn for moderate or borderline potassium. Otherwise set potassium_warning to an empty string.")
+            rules.append("- Only set phosphorus_warning when phosphorus is clearly high for the meal. Do not warn for moderate or borderline phosphorus. Otherwise set phosphorus_warning to an empty string.")
+        } else {
+            rules.append("- Set sodium_warning, potassium_warning, and phosphorus_warning to empty strings.")
         }
 
         return rules.joined(separator: "\n")

@@ -20,6 +20,9 @@ final class FoodEntry {
     var carbsG: Double
     var fatG: Double
     var fiberG: Double
+    var sodiumMg: Double
+    var potassiumMg: Double
+    var phosphorusMg: Double
     var notes: String
     var kidneyWarning: String
     var confidence: String
@@ -34,6 +37,9 @@ final class FoodEntry {
         carbsG: Double = 0,
         fatG: Double = 0,
         fiberG: Double = 0,
+        sodiumMg: Double = 0,
+        potassiumMg: Double = 0,
+        phosphorusMg: Double = 0,
         notes: String = "",
         kidneyWarning: String = "",
         confidence: String = "manual",
@@ -49,6 +55,9 @@ final class FoodEntry {
         self.carbsG = carbsG
         self.fatG = fatG
         self.fiberG = fiberG
+        self.sodiumMg = sodiumMg
+        self.potassiumMg = potassiumMg
+        self.phosphorusMg = phosphorusMg
         self.notes = notes
         self.kidneyWarning = kidneyWarning
         self.confidence = confidence
