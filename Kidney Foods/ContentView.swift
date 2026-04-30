@@ -1,61 +1,2856 @@
-//
 //  ContentView.swift
 //  Kidney Foods
 //
 //  Created by Quinn Rieman on 28/4/26.
 //
 
-import SwiftUI
+import PhotosUI
 import SwiftData
+import SwiftUI
+import UIKit
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    var onReady: () -> Void = {}
+    @State private var selectedTab = 0
 
     var body: some View {
-        NavigationSplitView {
+        TabView(selection: $selectedTab) {
+            DailyLogView()
+                .tabItem {
+                    Label("Today", systemImage: "list.bullet.rectangle.portrait.fill")
+                }
+                .tag(0)
+
+            LogFoodView(selectedTab: $selectedTab)
+                .tabItem {
+                    Label("Log Food", systemImage: "camera.fill")
+                }
+                .tag(1)
+
+            HistoryView()
+                .tabItem {
+                    Label("History", systemImage: "clock.fill")
+                }
+                .tag(2)
+
+            GuideRootView()
+                .tabItem {
+                    Label("Guide", systemImage: "heart.text.square.fill")
+                }
+                .tag(3)
+
+            SettingsView {
+                selectedTab = 0
+            }
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
+                .tag(4)
+        }
+        .tint(.green)
+        .onAppear {
+            onReady()
+        }
+    }
+}
+
+private struct DailyLogView: View {
+    @Query(sort: \FoodEntry.timestamp, order: .reverse) private var entries: [FoodEntry]
+    @Environment(\.modelContext) private var modelContext
+
+    private var todayEntries: [FoodEntry] {
+        entries.filter { Calendar.current.isDateInToday($0.timestamp) }
+    }
+
+    private var totals: NutritionTotals {
+        NutritionTotals(entries: todayEntries)
+    }
+
+    var body: some View {
+        NavigationStack {
             List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+                Section {
+                    TotalsCard(totals: totals)
+                }
+
+                if todayEntries.isEmpty {
+                    ContentUnavailableView(
+                        "No meals logged today",
+                        systemImage: "fork.knife",
+                        description: Text("Use Log Food to capture a meal photo or add an entry manually.")
+                    )
+                } else {
+                    Section("Today") {
+                        ForEach(todayEntries) { entry in
+                            NavigationLink {
+                                FoodEntryDetailView(entry: entry)
+                            } label: {
+                                FoodEntryRow(entry: entry)
+                            }
+                        }
+                        .onDelete(perform: delete)
                     }
                 }
-                .onDelete(perform: deleteItems)
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
+            .navigationTitle(todayTitle)
         }
     }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
+    private var todayTitle: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d"
+        return formatter.string(from: Date())
     }
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+    private func delete(at offsets: IndexSet) {
+        for index in offsets {
+            modelContext.delete(todayEntries[index])
+        }
+    }
+}
+
+private struct LogFoodView: View {
+    @Binding var selectedTab: Int
+
+    @State private var showCamera = false
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var pendingImage: IdentifiableImage?
+    @State private var showTextEntry = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    VStack(spacing: 20) {
+                        Image(systemName: "fork.knife.circle.fill")
+                            .font(.system(size: 88))
+                            .foregroundStyle(.green)
+
+                        VStack(spacing: 8) {
+                            Text("Log a Meal")
+                                .font(.title.bold())
+                            Text("Take a photo, choose from your library, or describe what you ate. If no API key is configured, you can still save the photo and fill in the nutrition manually.")
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 30)
+
+                    VStack(spacing: 14) {
+                        Button {
+                            showCamera = true
+                        } label: {
+                            ActionButtonLabel(
+                                title: "Take Photo",
+                                systemImage: "camera.fill",
+                                fill: Color.green,
+                                foreground: .white
+                            )
+                        }
+
+                        PhotosPicker(selection: $pickerItem, matching: .images) {
+                            ActionButtonLabel(
+                                title: "Choose from Library",
+                                systemImage: "photo.on.rectangle.angled",
+                                fill: Color.green.opacity(0.12),
+                                foreground: .green
+                            )
+                        }
+
+                        Button {
+                            showTextEntry = true
+                        } label: {
+                            ActionButtonLabel(
+                                title: "Describe Food",
+                                systemImage: "text.bubble.fill",
+                                fill: Color.green.opacity(0.12),
+                                foreground: .green
+                            )
+                        }
+                    }
+
+                    if !Config.isConfigured {
+                        InfoBanner(
+                            title: "AI not configured",
+                            message: "Add an Anthropic API key in Settings if you want automatic nutrition estimates from food photos."
+                        )
+                    }
+                }
+                .padding(20)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Log Food")
+        }
+        .sheet(isPresented: $showCamera) {
+            ImagePicker(sourceType: .camera) { image in
+                pendingImage = IdentifiableImage(image: image)
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(item: $pendingImage) { item in
+            PhotoAnalysisView(image: item.image) {
+                pendingImage = nil
+                selectedTab = 0
+            }
+        }
+        .sheet(isPresented: $showTextEntry) {
+            TextAnalysisEntryView {
+                showTextEntry = false
+                selectedTab = 0
+            }
+        }
+        .onChange(of: pickerItem) { _, item in
+            Task {
+                if let data = try? await item?.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    pickerItem = nil
+                    try? await Task.sleep(for: .milliseconds(300))
+                    pendingImage = IdentifiableImage(image: image)
+                } else {
+                    pickerItem = nil
+                }
             }
         }
     }
 }
 
+private struct HistoryView: View {
+    @Query(sort: \FoodEntry.timestamp, order: .reverse) private var entries: [FoodEntry]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if entries.isEmpty {
+                    ContentUnavailableView(
+                        "No food history yet",
+                        systemImage: "clock.arrow.circlepath",
+                        description: Text("Captured and manually logged meals will appear here.")
+                    )
+                } else {
+                    ForEach(groupedEntries, id: \.date) { section in
+                        Section(section.title) {
+                            ForEach(section.entries) { entry in
+                                NavigationLink {
+                                    FoodEntryDetailView(entry: entry)
+                                } label: {
+                                    FoodEntryRow(entry: entry)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("History")
+        }
+    }
+
+    private var groupedEntries: [HistorySection] {
+        let grouped = Dictionary(grouping: entries) { entry in
+            Calendar.current.startOfDay(for: entry.timestamp)
+        }
+
+        return grouped.keys.sorted(by: >).map { date in
+            HistorySection(date: date, entries: grouped[date] ?? [])
+        }
+    }
+}
+
+private struct GuideRootView: View {
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+
+    private let recommendedGroups: [FoodGroup] = [
+        FoodGroup(
+            title: "Lower-Sodium Staples",
+            systemImage: "leaf.circle.fill",
+            tint: .green,
+            items: [
+                "Fresh or frozen vegetables without added sauce",
+                "Rice, pasta, oats, tortillas, and unsalted crackers",
+                "Homemade meals seasoned with herbs instead of heavy salt"
+            ]
+        ),
+        FoodGroup(
+            title: "Kidney-Friendlier Produce",
+            systemImage: "apple.logo",
+            tint: .teal,
+            items: [
+                "Apples, berries, grapes, peaches, pineapple",
+                "Cabbage, cauliflower, cucumber, onions, lettuce",
+                "Portions should still match potassium guidance from the care team"
+            ]
+        ),
+        FoodGroup(
+            title: "Lean Protein Choices",
+            systemImage: "fork.knife.circle.fill",
+            tint: .blue,
+            items: [
+                "Egg whites, fish, chicken, turkey",
+                "Tuna packed in water with low sodium",
+                "Protein goals depend on CKD stage and dialysis status"
+            ]
+        )
+    ]
+
+    private let foodsToLimit: [FoodGroup] = [
+        FoodGroup(
+            title: "Foods Often High In Sodium",
+            systemImage: "exclamationmark.triangle.fill",
+            tint: .orange,
+            items: [
+                "Processed meats like bacon, sausage, deli meat, and hot dogs",
+                "Fast food, instant noodles, canned soups, and chips",
+                "Soy sauce, seasoning packets, and many salt substitutes"
+            ]
+        ),
+        FoodGroup(
+            title: "Foods Often High In Potassium",
+            systemImage: "bolt.heart.fill",
+            tint: .yellow,
+            items: [
+                "Bananas, oranges, melon, and dried fruit",
+                "Potatoes, tomatoes, spinach, and avocado",
+                "Large amounts of beans, dairy, and some salt substitutes"
+            ]
+        ),
+        FoodGroup(
+            title: "Foods Often High In Phosphorus",
+            systemImage: "drop.triangle.fill",
+            tint: .red,
+            items: [
+                "Dark colas and processed foods with ingredients containing 'phos'",
+                "Large amounts of cheese, milk, nuts, seeds, and bran cereals",
+                "Packaged foods with phosphate additives"
+            ]
+        )
+    ]
+
+    private let menuPlans: [MenuPlan] = [
+        MenuPlan(
+            title: "Menu Plan A",
+            meals: [
+                Meal(name: "Breakfast", items: "Oatmeal with blueberries, toast with unsalted butter, herbal tea"),
+                Meal(name: "Lunch", items: "Grilled chicken wrap with lettuce and cucumber, apple slices"),
+                Meal(name: "Dinner", items: "Baked fish, white rice, roasted cauliflower, side salad"),
+                Meal(name: "Snack", items: "Unsalted popcorn or crackers with a small serving of cream cheese")
+            ]
+        ),
+        MenuPlan(
+            title: "Menu Plan B",
+            meals: [
+                Meal(name: "Breakfast", items: "Egg-white scramble with peppers and onions, English muffin, grapes"),
+                Meal(name: "Lunch", items: "Turkey sandwich on white bread with lettuce, cabbage slaw, pear"),
+                Meal(name: "Dinner", items: "Roasted chicken, pasta with olive oil and garlic, green beans"),
+                Meal(name: "Snack", items: "Rice cakes with a little jam or unsalted cereal")
+            ]
+        )
+    ]
+
+    private let medicationPages: [MedicationPage] = [
+        MedicationPage(
+            title: "Pain Medicines",
+            systemImage: "pills.fill",
+            tint: .red,
+            subtitle: "What is usually preferred and what to avoid",
+            summary: "Pain medicine safety matters in CKD because some common drugs can reduce kidney blood flow or build up as kidney function drops.",
+            safeItems: [
+                "Acetaminophen is often preferred over NSAIDs when used as directed.",
+                "Topical pain products such as lidocaine, capsaicin, menthol, or camphor may be safer options for some people.",
+                "Prescription pain medicines can sometimes be used, but dose changes may be needed based on eGFR."
+            ],
+            cautionItems: [
+                "Ibuprofen, naproxen, ketorolac, meloxicam, celecoxib, diclofenac tablets, and high-dose aspirin are NSAIDs that often are not kidney friendly in CKD.",
+                "NSAIDs are especially risky with dehydration, heart failure, liver disease, or when used with ACE inhibitors, ARBs, or diuretics.",
+                "Many cold and flu products include hidden NSAIDs, so labels need to be checked carefully."
+            ]
+        ),
+        MedicationPage(
+            title: "Blood Pressure Medicines",
+            systemImage: "heart.text.square.fill",
+            tint: .blue,
+            subtitle: "Common kidney-protective medicines and monitoring points",
+            summary: "Blood pressure control is a major part of kidney protection, but the best medicine depends on albuminuria, blood pressure, potassium, and eGFR.",
+            safeItems: [
+                "ACE inhibitors and ARBs may help protect kidney function in people with CKD, high blood pressure, diabetes, or albumin in the urine.",
+                "Diuretics are commonly used to manage blood pressure and extra fluid.",
+                "These medicines are often kidney-friendly when monitored with follow-up blood tests."
+            ],
+            cautionItems: [
+                "ACE inhibitors, ARBs, and diuretics can change potassium or creatinine, so lab monitoring is important.",
+                "Dose adjustments may be needed if kidney function worsens, blood pressure runs low, or dehydration occurs.",
+                "Do not stop blood pressure medicines suddenly unless a clinician tells you to."
+            ]
+        ),
+        MedicationPage(
+            title: "Diabetes Medicines",
+            systemImage: "cross.case.circle.fill",
+            tint: .green,
+            subtitle: "Common CKD considerations for glucose-lowering drugs",
+            summary: "Many diabetes medicines can still be used in CKD, but some need lower doses or closer review as eGFR changes.",
+            safeItems: [
+                "Some diabetes medicines can be kidney-protective or still safe with dose adjustment.",
+                "Insulin is often used in CKD, but the dose may need change because insulin can stay in the body longer.",
+                "Medication plans usually work best when tailored to both blood sugar goals and kidney function."
+            ],
+            cautionItems: [
+                "Some diabetes medicines are reduced or stopped at lower eGFR levels.",
+                "Risk of low blood sugar can increase as kidney function declines.",
+                "All diabetes medicine changes should be tied to current labs and clinician guidance."
+            ]
+        ),
+        MedicationPage(
+            title: "Stomach And OTC Medicines",
+            systemImage: "stethoscope.circle.fill",
+            tint: .orange,
+            subtitle: "Antacids, reflux medicines, and supplements",
+            summary: "Over-the-counter products are easy to underestimate, but several are problematic in CKD because ingredients can accumulate or hide unsafe drugs.",
+            safeItems: [
+                "Some reflux and stomach medicines can still be used safely if the dose matches kidney function.",
+                "Pharmacist review is useful for any OTC medication used regularly.",
+                "Bringing all prescription, OTC, and supplement products to appointments improves safety."
+            ],
+            cautionItems: [
+                "Antacids containing aluminum, magnesium, or large amounts of calcium may not be kidney friendly.",
+                "H2 blockers and proton pump inhibitors may need review, especially with long-term use.",
+                "Herbal supplements should not be assumed safe for kidneys.",
+                "Combination OTC products may include NSAIDs or other ingredients that are risky in CKD."
+            ]
+        )
+    ]
+
+    private let heartBetterChoices: [FoodGroup] = [
+        FoodGroup(
+            title: "Heart-Healthier Staples",
+            systemImage: "heart.circle.fill",
+            tint: .pink,
+            items: [
+                "High-fiber grains such as oats and whole grains when tolerated",
+                "Beans, lentils, and vegetables when potassium goals allow",
+                "Foods prepared with olive oil instead of heavy saturated fat"
+            ]
+        ),
+        FoodGroup(
+            title: "Lean And Unsaturated Fats",
+            systemImage: "drop.circle.fill",
+            tint: .red,
+            items: [
+                "Fish, skinless poultry, nuts, seeds, and avocado in appropriate portions",
+                "Low-sodium meals built around vegetables and minimally processed foods",
+                "Meals that limit added sugar and refined fried foods"
+            ]
+        )
+    ]
+
+    private let heartFoodsToLimit: [FoodGroup] = [
+        FoodGroup(
+            title: "High Saturated Fat Foods",
+            systemImage: "heart.slash.circle.fill",
+            tint: .orange,
+            items: [
+                "Fried foods, fast food, and pastries",
+                "Fatty red meat, processed meat, and heavy cream sauces",
+                "Large portions of butter, shortening, and full-fat desserts"
+            ]
+        ),
+        FoodGroup(
+            title: "High Sodium Foods",
+            systemImage: "waveform.path.ecg.rectangle.fill",
+            tint: .yellow,
+            items: [
+                "Processed snacks, canned soups, deli meats, and restaurant meals",
+                "Foods with added salt that may worsen blood pressure and fluid retention",
+                "Sugar-sweetened drinks and highly processed convenience foods"
+            ]
+        )
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    heroCard
+
+                    sectionHeader(
+                        title: "Usually Better Choices",
+                        subtitle: "Common kidney-friendlier foods for many adults with chronic kidney disease."
+                    )
+
+                    ForEach(recommendedGroups) { group in
+                        GuideCard(group: group)
+                    }
+
+                    sectionHeader(
+                        title: "Often Limited Or Avoided",
+                        subtitle: "These foods are commonly restricted because of sodium, potassium, or phosphorus."
+                    )
+
+                    ForEach(foodsToLimit) { group in
+                        GuideCard(group: group)
+                    }
+
+                    sectionHeader(
+                        title: "Sample Menu Plans",
+                        subtitle: "Reference one-day meal ideas. Exact portions and protein targets should come from a clinician or renal dietitian."
+                    )
+
+                    ForEach(menuPlans) { plan in
+                        MenuPlanCard(plan: plan)
+                    }
+
+                    if heartChecksEnabled {
+                        sectionHeader(
+                            title: "Heart Health Guide",
+                            subtitle: "General food patterns that support healthier cholesterol, blood pressure, and overall cardiovascular health."
+                        )
+
+                        ForEach(heartBetterChoices) { group in
+                            GuideCard(group: group)
+                        }
+
+                        sectionHeader(
+                            title: "Heart Foods To Limit",
+                            subtitle: "Common foods that may be harder on heart health because of sodium, saturated fat, or heavy processing."
+                        )
+
+                        ForEach(heartFoodsToLimit) { group in
+                            GuideCard(group: group)
+                        }
+                    }
+
+                    if kidneyChecksEnabled {
+                        sectionHeader(
+                            title: "Medicine Pages",
+                            subtitle: "Open a medication page for focused kidney-safety guidance by category."
+                        )
+
+                        ForEach(medicationPages) { page in
+                            NavigationLink(value: page) {
+                                MedicationPageCard(page: page)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Health Guide")
+            .navigationDestination(for: MedicationPage.self) { page in
+                MedicationDetailView(page: page)
+            }
+        }
+    }
+
+    private var heroCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("MealVue Health Guide")
+                .font(.largeTitle.bold())
+
+            Text("Track meals, review food choices, and keep kidney and heart health checks in one place.")
+                .foregroundStyle(.secondary)
+
+            Label("Always confirm diet restrictions and medical advice with a clinician.", systemImage: "cross.case.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.green)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [Color.green.opacity(0.16), Color.blue.opacity(0.10)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private func sectionHeader(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.title2.bold())
+
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct SettingsView: View {
+    var onDone: () -> Void = {}
+    @AppStorage("anthropicAPIKey") private var anthropicAPIKey = ""
+    @AppStorage("geminiAPIKey") private var geminiAPIKey = ""
+    @AppStorage("geminiModelID") private var geminiModelID = GeminiModel.defaultModel.id
+    @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
+    @AppStorage("openAIModelID") private var openAIModelID = OpenAIModel.defaultModel.id
+    @AppStorage("openRouterAPIKey") private var openRouterAPIKey = ""
+    @AppStorage("openRouterModelID") private var openRouterModelID = "openrouter/free"
+    @AppStorage("aiProvider") private var aiProviderRaw = AIProvider.anthropic.rawValue
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+
+    @State private var showAnthropicKey = false
+    @State private var showGeminiKey = false
+    @State private var showOpenAIKey = false
+    @State private var showOpenRouterKey = false
+
+    @FocusState private var focusedField: SettingsField?
+    @State private var geminiModels: [GeminiModel] = GeminiModel.defaults
+    @State private var openAIModels: [OpenAIModel] = OpenAIModel.defaults
+    @State private var openRouterModels: [OpenRouterModel] = [.freeRouter]
+    @State private var isLoadingGeminiModels = false
+    @State private var isLoadingOpenAIModels = false
+    @State private var isLoadingModels = false
+    @State private var geminiError = ""
+    @State private var openAIError = ""
+    @State private var openRouterError = ""
+
+    private var selectedProvider: AIProvider {
+        AIProvider(rawValue: aiProviderRaw) ?? .anthropic
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("AI Analysis") {
+                    Picker("Provider", selection: $aiProviderRaw) {
+                        ForEach(AIProvider.allCases) { provider in
+                            Text(provider.displayName).tag(provider.rawValue)
+                        }
+                    }
+
+                    if selectedProvider == .anthropic {
+                        APIKeyField(
+                            title: "Anthropic API Key",
+                            text: $anthropicAPIKey,
+                            isVisible: $showAnthropicKey,
+                            focusedField: $focusedField,
+                            field: .anthropicKey
+                        )
+
+                        Text("Uses Anthropic's Messages API for food photo and text analysis.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text(anthropicAPIKey.isEmpty ? "No Anthropic API key saved." : "Anthropic API key saved.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundColor(anthropicAPIKey.isEmpty ? .secondary : .green)
+                    } else if selectedProvider == .gemini {
+                        APIKeyField(
+                            title: "Google Gemini API Key",
+                            text: $geminiAPIKey,
+                            isVisible: $showGeminiKey,
+                            focusedField: $focusedField,
+                            field: .geminiKey
+                        )
+
+                        Button(isLoadingGeminiModels ? "Loading Models..." : "Refresh Gemini Models") {
+                            Task { await loadGeminiModels() }
+                        }
+                        .disabled(geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoadingGeminiModels)
+
+                        if isLoadingGeminiModels {
+                            ProgressView()
+                        }
+
+                        Picker("Gemini Model", selection: $geminiModelID) {
+                            ForEach(geminiModels) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
+
+                        if !geminiError.isEmpty {
+                            Text(geminiError)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+
+                        Text("Uses Google's Gemini generateContent API for text and image understanding.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text(geminiAPIKey.isEmpty ? "No Gemini API key saved." : "Gemini API key saved.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundColor(geminiAPIKey.isEmpty ? .secondary : .green)
+                    } else if selectedProvider == .openAI {
+                        APIKeyField(
+                            title: "OpenAI API Key",
+                            text: $openAIAPIKey,
+                            isVisible: $showOpenAIKey,
+                            focusedField: $focusedField,
+                            field: .openAIKey
+                        )
+
+                        Button(isLoadingOpenAIModels ? "Loading Models..." : "Refresh OpenAI Models") {
+                            Task { await loadOpenAIModels() }
+                        }
+                        .disabled(openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoadingOpenAIModels)
+
+                        if isLoadingOpenAIModels {
+                            ProgressView()
+                        }
+
+                        Picker("OpenAI Model", selection: $openAIModelID) {
+                            ForEach(openAIModels) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
+
+                        if !openAIError.isEmpty {
+                            Text(openAIError)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+
+                        Text("Uses OpenAI's Chat Completions API with image or text inputs.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text(openAIAPIKey.isEmpty ? "No OpenAI API key saved." : "OpenAI API key saved.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundColor(openAIAPIKey.isEmpty ? .secondary : .green)
+                    } else {
+                        APIKeyField(
+                            title: "OpenRouter API Key",
+                            text: $openRouterAPIKey,
+                            isVisible: $showOpenRouterKey,
+                            focusedField: $focusedField,
+                            field: .openRouterKey
+                        )
+
+                        Button(isLoadingModels ? "Loading Models..." : "Refresh Free Models") {
+                            Task { await loadOpenRouterModels() }
+                        }
+                        .disabled(openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoadingModels)
+
+                        if isLoadingModels {
+                            ProgressView()
+                        }
+
+                        Picker("Free Model", selection: $openRouterModelID) {
+                            ForEach(openRouterModels) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
+
+                        if !openRouterError.isEmpty {
+                            Text(openRouterError)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+
+                        Text("Uses OpenRouter's chat completions API. The list above is loaded from OpenRouter's current models API and filtered to free text models.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text(openRouterAPIKey.isEmpty ? "No OpenRouter API key saved." : "OpenRouter API key saved.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundColor(openRouterAPIKey.isEmpty ? .secondary : .green)
+                    }
+
+                    Button("Done Typing") {
+                        focusedField = nil
+                    }
+                }
+
+                Section("Health Checks") {
+                    Toggle("Kidney Health Checker", isOn: $kidneyChecksEnabled)
+                    Toggle("Heart Health Checker", isOn: $heartChecksEnabled)
+
+                    Text("Turn these checks on or off for AI warnings and guide content.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("About This App") {
+                    Label("MealVue food logging with photo capture", systemImage: "camera.fill")
+                    Label("Manual and AI-assisted nutrition entry", systemImage: "square.and.pencil")
+                    Label("Kidney and heart health guidance", systemImage: "heart.text.square.fill")
+                }
+
+                Section("Safety") {
+                    Text("This app is for reference and self-tracking only.")
+                    Text("Kidney diets and medication decisions should be personalized with a clinician, renal dietitian, or pharmacist.")
+                }
+            }
+            .navigationTitle("MealVue Settings")
+            .scrollDismissesKeyboard(.interactively)
+            .task(id: aiProviderRaw) {
+                if selectedProvider == .gemini, geminiModels.count <= GeminiModel.defaults.count, !geminiAPIKey.isEmpty {
+                    await loadGeminiModels()
+                }
+
+                if selectedProvider == .openAI, openAIModels.count <= OpenAIModel.defaults.count, !openAIAPIKey.isEmpty {
+                    await loadOpenAIModels()
+                }
+
+                guard selectedProvider == .openRouter, openRouterModels.count <= 1, !openRouterAPIKey.isEmpty else { return }
+                await loadOpenRouterModels()
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        focusedField = nil
+                        onDone()
+                    }
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        focusedField = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadOpenRouterModels() async {
+        let key = openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            openRouterModels = [.freeRouter]
+            openRouterError = ""
+            return
+        }
+
+        isLoadingModels = true
+        defer { isLoadingModels = false }
+
+        do {
+            let fetched = try await ClaudeService.fetchOpenRouterFreeModels(apiKey: key)
+            openRouterModels = fetched.isEmpty ? [.freeRouter] : fetched
+
+            if !openRouterModels.contains(where: { $0.id == openRouterModelID }) {
+                openRouterModelID = openRouterModels.first?.id ?? "openrouter/free"
+            }
+
+            openRouterError = fetched.isEmpty ? "No free models were returned for this key. Falling back to OpenRouter Free Router." : ""
+        } catch {
+            openRouterModels = [.freeRouter]
+            openRouterModelID = "openrouter/free"
+            openRouterError = error.localizedDescription
+        }
+    }
+
+    private func loadGeminiModels() async {
+        let key = geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            geminiModels = GeminiModel.defaults
+            geminiError = ""
+            return
+        }
+
+        isLoadingGeminiModels = true
+        defer { isLoadingGeminiModels = false }
+
+        do {
+            let fetched = try await ClaudeService.fetchGeminiModels(apiKey: key)
+            geminiModels = fetched.isEmpty ? GeminiModel.defaults : fetched
+
+            if !geminiModels.contains(where: { $0.id == geminiModelID }) {
+                geminiModelID = geminiModels.first?.id ?? GeminiModel.defaultModel.id
+            }
+
+            geminiError = fetched.isEmpty ? "No Gemini generateContent models were returned. Falling back to defaults." : ""
+        } catch {
+            geminiModels = GeminiModel.defaults
+            geminiModelID = GeminiModel.defaultModel.id
+            geminiError = error.localizedDescription
+        }
+    }
+
+    private func loadOpenAIModels() async {
+        let key = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            openAIModels = OpenAIModel.defaults
+            openAIError = ""
+            return
+        }
+
+        isLoadingOpenAIModels = true
+        defer { isLoadingOpenAIModels = false }
+
+        do {
+            let fetched = try await ClaudeService.fetchOpenAIModels(apiKey: key)
+            openAIModels = fetched.isEmpty ? OpenAIModel.defaults : fetched
+
+            if !openAIModels.contains(where: { $0.id == openAIModelID }) {
+                openAIModelID = openAIModels.first?.id ?? OpenAIModel.defaultModel.id
+            }
+
+            openAIError = fetched.isEmpty ? "No compatible OpenAI chat models were returned. Falling back to defaults." : ""
+        } catch {
+            openAIModels = OpenAIModel.defaults
+            openAIModelID = OpenAIModel.defaultModel.id
+            openAIError = error.localizedDescription
+        }
+    }
+}
+
+private enum SettingsField: Hashable {
+    case anthropicKey
+    case geminiKey
+    case openAIKey
+    case openRouterKey
+}
+
+private struct APIKeyField: View {
+    let title: String
+    @Binding var text: String
+    @Binding var isVisible: Bool
+    @FocusState.Binding var focusedField: SettingsField?
+    let field: SettingsField
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Group {
+                if isVisible {
+                    TextField(title, text: $text)
+                } else {
+                    SecureField(title, text: $text)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .focused($focusedField, equals: field)
+
+            Button(isVisible ? "Hide" : "View") {
+                isVisible.toggle()
+            }
+            .font(.footnote.weight(.semibold))
+        }
+    }
+}
+
+private struct FoodEntryRow: View {
+    let entry: FoodEntry
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let image = entry.uiImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(entry.foodName)
+                        .font(.headline)
+                    Spacer()
+                    Text("\(entry.calories) kcal")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+
+                if !entry.estimatedQuantity.isEmpty {
+                    Text(entry.estimatedQuantity)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 10) {
+                    MacroChip(label: "P", value: entry.proteinG, tint: .blue)
+                    MacroChip(label: "C", value: entry.carbsG, tint: .green)
+                    MacroChip(label: "F", value: entry.fatG, tint: .orange)
+                    MacroChip(label: "Fi", value: entry.fiberG, tint: .purple)
+                }
+
+                if kidneyChecksEnabled && !entry.kidneyWarning.isEmpty {
+                    Label(entry.kidneyWarning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct FoodEntryDetailView: View {
+    let entry: FoodEntry
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+
+    var body: some View {
+        List {
+            if let image = entry.uiImage {
+                Section {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+            }
+
+            Section("Meal") {
+                detailRow("Food", value: entry.foodName)
+                detailRow("Quantity", value: entry.estimatedQuantity.isEmpty ? "Not provided" : entry.estimatedQuantity)
+                detailRow("Logged", value: entry.timestamp.formatted(date: .abbreviated, time: .shortened))
+                detailRow("AI confidence", value: entry.confidence.capitalized)
+            }
+
+            Section("Nutrition") {
+                detailRow("Calories", value: "\(entry.calories)")
+                detailRow("Protein", value: "\(Int(entry.proteinG)) g")
+                detailRow("Carbs", value: "\(Int(entry.carbsG)) g")
+                detailRow("Fat", value: "\(Int(entry.fatG)) g")
+                detailRow("Fiber", value: "\(Int(entry.fiberG)) g")
+            }
+
+            Section("Health Notes") {
+                if kidneyChecksEnabled {
+                    Text(entry.kidneyWarning.isEmpty ? "No kidney warning entered." : entry.kidneyWarning)
+                } else {
+                    Text("Kidney health checker is turned off.")
+                }
+
+                if !entry.aiNotes.isEmpty {
+                    Text(entry.aiNotes)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !entry.notes.isEmpty {
+                    Text(entry.notes)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle(entry.foodName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func detailRow(_ label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct PhotoAnalysisView: View {
+    let image: UIImage
+    var onSave: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+
+    @State private var phase: AnalysisPhase
+    @State private var foodName = ""
+    @State private var quantity = ""
+    @State private var calories = ""
+    @State private var protein = ""
+    @State private var carbs = ""
+    @State private var fat = ""
+    @State private var fiber = ""
+    @State private var notes = ""
+    @State private var kidneyWarning = ""
+    @State private var heartWarning = ""
+    @State private var confidence = "manual"
+    @State private var modelUsed = ""
+    @State private var providerUsed = ""
+
+    init(image: UIImage, onSave: @escaping () -> Void) {
+        self.image = image
+        self.onSave = onSave
+        _phase = State(initialValue: Config.isConfigured ? .analyzing : .editing)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 220)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .padding(.horizontal)
+
+                    switch phase {
+                    case .analyzing:
+                        ProgressView("Analyzing photo...")
+                            .padding(.top, 40)
+
+                    case .editing:
+                        if !Config.isConfigured {
+                            InfoBanner(
+                                title: "Manual mode",
+                                message: "No API key is configured, so fill in the meal details yourself and save the photo entry."
+                            )
+                            .padding(.horizontal)
+                        }
+
+                        if kidneyChecksEnabled && !kidneyWarning.isEmpty {
+                            WarningCard(message: kidneyWarning)
+                                .padding(.horizontal)
+                        }
+
+                        if heartChecksEnabled && !heartWarning.isEmpty {
+                            WarningCard(message: heartWarning, tint: .pink)
+                                .padding(.horizontal)
+                        }
+
+                        if !modelUsed.isEmpty {
+                            ModelInfoCard(provider: providerUsed, model: modelUsed, confidence: confidence)
+                                .padding(.horizontal)
+                        }
+
+                        MealEditor(
+                            foodName: $foodName,
+                            quantity: $quantity,
+                            calories: $calories,
+                            protein: $protein,
+                            carbs: $carbs,
+                            fat: $fat,
+                            fiber: $fiber,
+                            notes: $notes
+                        )
+                    case .error(let message):
+                        ErrorStateView(message: message) {
+                            Task { await analyze() }
+                        }
+                    }
+                }
+                .padding(.vertical)
+            }
+            .navigationTitle("Photo Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                if case .editing = phase {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { save() }
+                            .fontWeight(.bold)
+                    }
+                }
+            }
+        }
+        .task {
+            guard Config.isConfigured else { return }
+            await analyze()
+        }
+    }
+
+    private func analyze() async {
+        phase = .analyzing
+
+        do {
+            let result = try await ClaudeService.analyzeFood(image: image)
+            apply(result: result)
+            phase = .editing
+        } catch {
+            phase = .error(error.localizedDescription)
+        }
+    }
+
+    private func apply(result: NutritionResult) {
+        foodName = result.foodName
+        quantity = result.estimatedQuantity
+        calories = "\(result.calories)"
+        protein = format(result.proteinG)
+        carbs = format(result.carbsG)
+        fat = format(result.fatG)
+        fiber = format(result.fiberG)
+        notes = result.notes
+        kidneyWarning = Config.kidneyChecksEnabled ? result.kidneyWarning : ""
+        heartWarning = Config.heartChecksEnabled ? result.heartWarning : ""
+        confidence = result.confidence
+        modelUsed = result.modelUsed
+        providerUsed = result.providerName
+    }
+
+    private func save() {
+        let entry = FoodEntry(
+            foodName: foodName.trimmingCharacters(in: .whitespacesAndNewlines),
+            estimatedQuantity: quantity.trimmingCharacters(in: .whitespacesAndNewlines),
+            calories: Int(calories) ?? 0,
+            proteinG: Double(protein) ?? 0,
+            carbsG: Double(carbs) ?? 0,
+            fatG: Double(fat) ?? 0,
+            fiberG: Double(fiber) ?? 0,
+            notes: "",
+            kidneyWarning: kidneyChecksEnabled ? kidneyWarning.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            confidence: confidence,
+            aiNotes: combinedAINotes(
+                baseNotes: notes,
+                heartWarning: heartChecksEnabled ? heartWarning : "",
+                provider: providerUsed,
+                model: modelUsed
+            ),
+            imageData: image.jpegData(compressionQuality: 0.7)
+        )
+
+        modelContext.insert(entry)
+        onSave()
+    }
+}
+
+private struct TextAnalysisEntryView: View {
+    var onSave: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+
+    @State private var description = ""
+    @State private var phase: AnalysisPhase = .editing
+    @State private var foodName = ""
+    @State private var quantity = ""
+    @State private var calories = ""
+    @State private var protein = ""
+    @State private var carbs = ""
+    @State private var fat = ""
+    @State private var fiber = ""
+    @State private var notes = ""
+    @State private var kidneyWarning = ""
+    @State private var heartWarning = ""
+    @State private var confidence = "manual"
+    @State private var modelUsed = ""
+    @State private var providerUsed = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    if phase == .editing && foodName.isEmpty {
+                        VStack(spacing: 20) {
+                            TextField("Describe what you ate", text: $description, axis: .vertical)
+                                .lineLimit(3...6)
+                                .textFieldStyle(.roundedBorder)
+                                .padding(.horizontal)
+
+                            Button("Analyze Description") {
+                                Task { await analyze() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !Config.isConfigured)
+                            .padding(.horizontal)
+
+                            if !Config.isConfigured {
+                                InfoBanner(
+                                    title: "API key required",
+                                    message: "Text analysis needs an API key for the provider selected in Settings."
+                                )
+                                .padding(.horizontal)
+                            }
+                        }
+                        .padding(.top, 20)
+                    } else {
+                        switch phase {
+                        case .analyzing:
+                            ProgressView("Analyzing description...")
+                                .padding(.top, 40)
+
+                        case .editing:
+                            if kidneyChecksEnabled && !kidneyWarning.isEmpty {
+                                WarningCard(message: kidneyWarning)
+                                    .padding(.horizontal)
+                            }
+
+                            if heartChecksEnabled && !heartWarning.isEmpty {
+                                WarningCard(message: heartWarning, tint: .pink)
+                                    .padding(.horizontal)
+                            }
+
+                            if !modelUsed.isEmpty {
+                                ModelInfoCard(provider: providerUsed, model: modelUsed, confidence: confidence)
+                                    .padding(.horizontal)
+                            }
+
+                            MealEditor(
+                                foodName: $foodName,
+                                quantity: $quantity,
+                                calories: $calories,
+                                protein: $protein,
+                                carbs: $carbs,
+                                fat: $fat,
+                                fiber: $fiber,
+                                notes: $notes
+                            )
+
+                        case .error(let message):
+                            ErrorStateView(message: message) {
+                                Task { await analyze() }
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical)
+            }
+            .navigationTitle("Describe Food")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                if case .editing = phase, !foodName.isEmpty {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { save() }
+                            .fontWeight(.bold)
+                    }
+                }
+            }
+        }
+    }
+
+    private func analyze() async {
+        phase = .analyzing
+
+        do {
+            let result = try await ClaudeService.analyzeText(description: description.trimmingCharacters(in: .whitespacesAndNewlines))
+            foodName = result.foodName
+            quantity = result.estimatedQuantity
+            calories = "\(result.calories)"
+            protein = format(result.proteinG)
+            carbs = format(result.carbsG)
+            fat = format(result.fatG)
+            fiber = format(result.fiberG)
+            notes = result.notes
+            kidneyWarning = Config.kidneyChecksEnabled ? result.kidneyWarning : ""
+            heartWarning = Config.heartChecksEnabled ? result.heartWarning : ""
+            confidence = result.confidence
+            modelUsed = result.modelUsed
+            providerUsed = result.providerName
+            phase = .editing
+        } catch {
+            phase = .error(error.localizedDescription)
+        }
+    }
+
+    private func save() {
+        let entry = FoodEntry(
+            foodName: foodName.trimmingCharacters(in: .whitespacesAndNewlines),
+            estimatedQuantity: quantity.trimmingCharacters(in: .whitespacesAndNewlines),
+            calories: Int(calories) ?? 0,
+            proteinG: Double(protein) ?? 0,
+            carbsG: Double(carbs) ?? 0,
+            fatG: Double(fat) ?? 0,
+            fiberG: Double(fiber) ?? 0,
+            notes: "",
+            kidneyWarning: kidneyChecksEnabled ? kidneyWarning.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            confidence: confidence,
+            aiNotes: combinedAINotes(
+                baseNotes: notes,
+                heartWarning: heartChecksEnabled ? heartWarning : "",
+                provider: providerUsed,
+                model: modelUsed
+            ),
+            imageData: nil
+        )
+
+        modelContext.insert(entry)
+        onSave()
+    }
+}
+
+private struct MealEditor: View {
+    @Binding var foodName: String
+    @Binding var quantity: String
+    @Binding var calories: String
+    @Binding var protein: String
+    @Binding var carbs: String
+    @Binding var fat: String
+    @Binding var fiber: String
+    @Binding var notes: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            GroupBox("Food") {
+                VStack(spacing: 10) {
+                    editorRow("Name", text: $foodName)
+                    Divider()
+                    editorRow("Serving", text: $quantity)
+                }
+            }
+            .padding(.horizontal)
+
+            GroupBox("Nutrition") {
+                VStack(spacing: 10) {
+                    numericRow("Calories", text: $calories, unit: "kcal", isInt: true)
+                    Divider()
+                    numericRow("Protein", text: $protein, unit: "g")
+                    numericRow("Carbs", text: $carbs, unit: "g")
+                    numericRow("Fat", text: $fat, unit: "g")
+                    numericRow("Fiber", text: $fiber, unit: "g")
+                }
+            }
+            .padding(.horizontal)
+
+            GroupBox("Notes") {
+                TextField("Assumptions or comments", text: $notes, axis: .vertical)
+                    .lineLimit(2...5)
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    private func editorRow(_ label: String, text: Binding<String>) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 72, alignment: .leading)
+            TextField(label, text: text)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func numericRow(_ label: String, text: Binding<String>, unit: String, isInt: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            TextField("0", text: text)
+                .keyboardType(isInt ? .numberPad : .decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 68)
+            Text(unit)
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+        }
+    }
+}
+
+private struct TotalsCard: View {
+    let totals: NutritionTotals
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(totals.calories)")
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .foregroundStyle(.green)
+                Text("kcal")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(totals.entriesCount) meals")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                MacroSummaryCard(title: "Protein", value: totals.proteinG, tint: .blue)
+                MacroSummaryCard(title: "Carbs", value: totals.carbsG, tint: .green)
+                MacroSummaryCard(title: "Fat", value: totals.fatG, tint: .orange)
+                MacroSummaryCard(title: "Fiber", value: totals.fiberG, tint: .purple)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct MacroSummaryCard: View {
+    let title: String
+    let value: Double
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("\(Int(value))g")
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(tint)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct MacroChip: View {
+    let label: String
+    let value: Double
+    let tint: Color
+
+    var body: some View {
+        Text("\(label) \(Int(value))g")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.15))
+            .foregroundStyle(tint)
+            .clipShape(Capsule())
+    }
+}
+
+private struct ActionButtonLabel: View {
+    let title: String
+    let systemImage: String
+    let fill: Color
+    let foreground: Color
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(fill)
+            .foregroundStyle(foreground)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .font(.headline)
+    }
+}
+
+private struct InfoBanner: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct WarningCard: View {
+    let message: String
+    var tint: Color = .red
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(tint)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(tint.opacity(0.12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(tint.opacity(0.30), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct ModelInfoCard: View {
+    let provider: String
+    let model: String
+    let confidence: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "cpu.fill")
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("AI Result Details")
+                    .font(.headline)
+                Text("Provider: \(provider)")
+                    .font(.footnote)
+                Text("Model: \(model)")
+                    .font(.footnote)
+                Text("Confidence: \(confidence.capitalized)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private func combinedAINotes(baseNotes: String, heartWarning: String, provider: String, model: String) -> String {
+    var parts: [String] = []
+
+    let trimmedNotes = baseNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedNotes.isEmpty {
+        parts.append(trimmedNotes)
+    }
+
+    let trimmedHeartWarning = heartWarning.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedHeartWarning.isEmpty {
+        parts.append("Heart warning: \(trimmedHeartWarning)")
+    }
+
+    if !provider.isEmpty || !model.isEmpty {
+        parts.append("AI provider: \(provider) | Model: \(model)")
+    }
+
+    return parts.joined(separator: "\n")
+}
+
+private struct ErrorStateView: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.orange)
+                .padding(.top, 32)
+            Text("Analysis failed")
+                .font(.headline)
+            Text(message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            Button("Try Again", action: retry)
+                .buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+private struct FoodGroup: Identifiable {
+    let id = UUID()
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let items: [String]
+}
+
+private struct MenuPlan: Identifiable {
+    let id = UUID()
+    let title: String
+    let meals: [Meal]
+}
+
+private struct Meal: Identifiable {
+    let id = UUID()
+    let name: String
+    let items: String
+}
+
+private struct MedicationPage: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let subtitle: String
+    let summary: String
+    let safeItems: [String]
+    let cautionItems: [String]
+}
+
+private struct HistorySection {
+    let date: Date
+    let entries: [FoodEntry]
+
+    var title: String {
+        date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+}
+
+private struct NutritionTotals {
+    let calories: Int
+    let proteinG: Double
+    let carbsG: Double
+    let fatG: Double
+    let fiberG: Double
+    let entriesCount: Int
+
+    init(entries: [FoodEntry]) {
+        calories = entries.reduce(0) { $0 + $1.calories }
+        proteinG = entries.reduce(0) { $0 + $1.proteinG }
+        carbsG = entries.reduce(0) { $0 + $1.carbsG }
+        fatG = entries.reduce(0) { $0 + $1.fatG }
+        fiberG = entries.reduce(0) { $0 + $1.fiberG }
+        entriesCount = entries.count
+    }
+}
+
+private struct IdentifiableImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
+private enum AIProvider: String, CaseIterable, Identifiable {
+    case anthropic
+    case gemini
+    case openAI
+    case openRouter
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .anthropic: return "Anthropic"
+        case .gemini: return "Google Gemini"
+        case .openAI: return "OpenAI"
+        case .openRouter: return "OpenRouter"
+        }
+    }
+}
+
+private struct GeminiModel: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+
+    static let defaults: [GeminiModel] = [
+        GeminiModel(id: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash"),
+        GeminiModel(id: "gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash-Lite"),
+        GeminiModel(id: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro")
+    ]
+
+    static let defaultModel = defaults[0]
+}
+
+private struct OpenAIModel: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+
+    static let defaults: [OpenAIModel] = [
+        OpenAIModel(id: "gpt-4.1-mini", displayName: "GPT-4.1 Mini"),
+        OpenAIModel(id: "gpt-4o-mini", displayName: "GPT-4o Mini"),
+        OpenAIModel(id: "gpt-4.1", displayName: "GPT-4.1")
+    ]
+
+    static let defaultModel = defaults[0]
+}
+
+private struct OpenRouterModel: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+
+    static let freeRouter = OpenRouterModel(
+        id: "openrouter/free",
+        displayName: "OpenRouter Free Router"
+    )
+}
+
+private enum AnalysisPhase: Equatable {
+    case analyzing
+    case editing
+    case error(String)
+}
+
+private struct NutritionResult {
+    let foodName: String
+    let estimatedQuantity: String
+    let calories: Int
+    let proteinG: Double
+    let carbsG: Double
+    let fatG: Double
+    let fiberG: Double
+    let confidence: String
+    let notes: String
+    let kidneyWarning: String
+    let heartWarning: String
+    let providerName: String
+    let modelUsed: String
+}
+
+private enum Config {
+    private static let defaults = UserDefaults.standard
+
+    static var selectedProvider: AIProvider {
+        AIProvider(rawValue: defaults.string(forKey: "aiProvider") ?? "") ?? .anthropic
+    }
+
+    static var anthropicAPIKey: String {
+        defaults.string(forKey: "anthropicAPIKey") ?? ""
+    }
+
+    static var geminiAPIKey: String {
+        defaults.string(forKey: "geminiAPIKey") ?? ""
+    }
+
+    static var geminiModelID: String {
+        let saved = defaults.string(forKey: "geminiModelID") ?? ""
+        return saved.isEmpty ? GeminiModel.defaultModel.id : saved
+    }
+
+    static var openAIAPIKey: String {
+        defaults.string(forKey: "openAIAPIKey") ?? ""
+    }
+
+    static var openAIModelID: String {
+        let saved = defaults.string(forKey: "openAIModelID") ?? ""
+        return saved.isEmpty ? OpenAIModel.defaultModel.id : saved
+    }
+
+    static var openRouterAPIKey: String {
+        defaults.string(forKey: "openRouterAPIKey") ?? ""
+    }
+
+    static var openRouterModelID: String {
+        let saved = defaults.string(forKey: "openRouterModelID") ?? ""
+        return saved.isEmpty ? "openrouter/free" : saved
+    }
+
+    static var isConfigured: Bool {
+        switch selectedProvider {
+        case .anthropic:
+            return !anthropicAPIKey.isEmpty
+        case .gemini:
+            return !geminiAPIKey.isEmpty
+        case .openAI:
+            return !openAIAPIKey.isEmpty
+        case .openRouter:
+            return !openRouterAPIKey.isEmpty
+        }
+    }
+
+    static var kidneyChecksEnabled: Bool {
+        defaults.object(forKey: "kidneyChecksEnabled") as? Bool ?? true
+    }
+
+    static var heartChecksEnabled: Bool {
+        defaults.object(forKey: "heartChecksEnabled") as? Bool ?? true
+    }
+}
+
+private enum ClaudeService {
+    private static let anthropicURL = URL(string: "https://api.anthropic.com/v1/messages")!
+    private static let anthropicModel = "claude-sonnet-4-20250514"
+    private static let anthropicVersion = "2023-06-01"
+    private static let geminiModelsURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
+    private static let openAIURL = URL(string: "https://api.openai.com/v1/chat/completions")!
+    private static let openAIModelsURL = URL(string: "https://api.openai.com/v1/models")!
+    private static let openRouterChatURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+    private static let openRouterModelsURL = URL(string: "https://openrouter.ai/api/v1/models")!
+
+    static func analyzeFood(image: UIImage) async throws -> NutritionResult {
+        switch Config.selectedProvider {
+        case .anthropic:
+            return try await analyzeFoodWithAnthropic(image: image)
+        case .gemini:
+            return try await analyzeFoodWithGemini(image: image)
+        case .openAI:
+            return try await analyzeFoodWithOpenAI(image: image)
+        case .openRouter:
+            return try await analyzeFoodWithOpenRouter(image: image)
+        }
+    }
+
+    static func analyzeText(description: String) async throws -> NutritionResult {
+        switch Config.selectedProvider {
+        case .anthropic:
+            return try await analyzeTextWithAnthropic(description: description)
+        case .gemini:
+            return try await analyzeTextWithGemini(description: description)
+        case .openAI:
+            return try await analyzeTextWithOpenAI(description: description)
+        case .openRouter:
+            return try await analyzeTextWithOpenRouter(description: description)
+        }
+    }
+
+    static func fetchOpenRouterFreeModels(apiKey: String) async throws -> [OpenRouterModel] {
+        var request = URLRequest(url: openRouterModelsURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        struct ModelsResponse: Decodable {
+            let data: [Model]
+        }
+
+        struct Model: Decodable {
+            struct Architecture: Decodable {
+                let input_modalities: [String]?
+                let output_modalities: [String]?
+            }
+
+            struct Pricing: Decodable {
+                let prompt: String?
+                let completion: String?
+                let request: String?
+            }
+
+            let id: String
+            let name: String
+            let architecture: Architecture?
+            let pricing: Pricing?
+        }
+
+        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
+
+        let freeModels = decoded.data.filter { model in
+            let outputs = model.architecture?.output_modalities ?? ["text"]
+            guard outputs.contains("text") else { return false }
+
+            let prompt = Decimal(string: model.pricing?.prompt ?? "1") ?? 1
+            let completion = Decimal(string: model.pricing?.completion ?? "1") ?? 1
+            let request = Decimal(string: model.pricing?.request ?? "0") ?? 0
+            return prompt == 0 && completion == 0 && request == 0
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        .map { model in
+            OpenRouterModel(id: model.id, displayName: model.name)
+        }
+
+        var models = [OpenRouterModel.freeRouter]
+        models.append(contentsOf: freeModels)
+        return Array(NSOrderedSet(array: models).compactMap { $0 as? OpenRouterModel })
+    }
+
+    static func fetchGeminiModels(apiKey: String) async throws -> [GeminiModel] {
+        var components = URLComponents(url: geminiModelsURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "key", value: apiKey)
+        ]
+
+        guard let url = components?.url else {
+            throw ClaudeError.parseError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        struct GeminiModelsResponse: Decodable {
+            struct GeminiModelDTO: Decodable {
+                let name: String
+                let displayName: String?
+                let supportedGenerationMethods: [String]?
+            }
+
+            let models: [GeminiModelDTO]?
+        }
+
+        let decoded = try JSONDecoder().decode(GeminiModelsResponse.self, from: data)
+
+        let models = (decoded.models ?? [])
+            .filter { model in
+                (model.supportedGenerationMethods ?? []).contains("generateContent")
+            }
+            .map { model in
+                let id = model.name.replacingOccurrences(of: "models/", with: "")
+                return GeminiModel(
+                    id: id,
+                    displayName: model.displayName?.isEmpty == false ? model.displayName! : id
+                )
+            }
+            .sorted { (lhs: GeminiModel, rhs: GeminiModel) in
+                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+
+        return models
+    }
+
+    static func fetchOpenAIModels(apiKey: String) async throws -> [OpenAIModel] {
+        var request = URLRequest(url: openAIModelsURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        struct OpenAIModelsResponse: Decodable {
+            struct OpenAIModelDTO: Decodable {
+                let id: String
+                let owned_by: String?
+            }
+
+            let data: [OpenAIModelDTO]
+        }
+
+        let decoded = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
+
+        let blockedPrefixes = [
+            "whisper",
+            "tts-",
+            "omni-moderation",
+            "text-embedding",
+            "davinci",
+            "babbage",
+            "gpt-image",
+            "chatgpt-image",
+            "gpt-realtime",
+            "gpt-audio"
+        ]
+
+        let preferredPrefixes = [
+            "gpt-4.1",
+            "gpt-4o",
+            "gpt-5"
+        ]
+
+        return decoded.data
+            .filter { model in
+                preferredPrefixes.contains { model.id.hasPrefix($0) } &&
+                !blockedPrefixes.contains { model.id.hasPrefix($0) }
+            }
+            .map { model in
+                OpenAIModel(id: model.id, displayName: model.id)
+            }
+            .sorted { (lhs: OpenAIModel, rhs: OpenAIModel) in
+                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+    }
+
+    private static func analyzeFoodWithAnthropic(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1280)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "model": anthropicModel,
+            "max_tokens": 512,
+            "messages": [[
+                "role": "user",
+                "content": [
+                    [
+                        "type": "image",
+                        "source": [
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": jpeg.base64EncodedString()
+                        ]
+                    ],
+                    [
+                        "type": "text",
+                        "text": imageNutritionPrompt
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
+    }
+
+    private static func analyzeTextWithAnthropic(description: String) async throws -> NutritionResult {
+        let prompt = textNutritionPrompt(for: description)
+
+        let body: [String: Any] = [
+            "model": anthropicModel,
+            "max_tokens": 512,
+            "messages": [[
+                "role": "user",
+                "content": prompt
+            ]]
+        ]
+
+        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
+    }
+
+    private static func analyzeFoodWithGemini(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1280)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "contents": [[
+                "parts": [
+                    [
+                        "inline_data": [
+                            "mime_type": "image/jpeg",
+                            "data": jpeg.base64EncodedString()
+                        ]
+                    ],
+                    [
+                        "text": imageNutritionPrompt
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestGeminiResult(body: body, modelUsed: Config.geminiModelID)
+    }
+
+    private static func analyzeTextWithGemini(description: String) async throws -> NutritionResult {
+        let body: [String: Any] = [
+            "contents": [[
+                "parts": [
+                    [
+                        "text": textNutritionPrompt(for: description)
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestGeminiResult(body: body, modelUsed: Config.geminiModelID)
+    }
+
+    private static func analyzeFoodWithOpenAI(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1280)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "model": Config.openAIModelID,
+            "response_format": [
+                "type": "json_object"
+            ],
+            "messages": [[
+                "role": "user",
+                "content": [
+                    [
+                        "type": "text",
+                        "text": imageNutritionPrompt
+                    ],
+                    [
+                        "type": "image_url",
+                        "image_url": [
+                            "url": "data:image/jpeg;base64,\(jpeg.base64EncodedString())",
+                            "detail": "low"
+                        ]
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestOpenAIResult(body: body, modelUsed: Config.openAIModelID)
+    }
+
+    private static func analyzeTextWithOpenAI(description: String) async throws -> NutritionResult {
+        let body: [String: Any] = [
+            "model": Config.openAIModelID,
+            "response_format": [
+                "type": "json_object"
+            ],
+            "messages": [[
+                "role": "user",
+                "content": textNutritionPrompt(for: description)
+            ]]
+        ]
+
+        return try await requestOpenAIResult(body: body, modelUsed: Config.openAIModelID)
+    }
+
+    private static func analyzeFoodWithOpenRouter(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1280)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let prompt = """
+        Analyze this food image and return ONLY a valid JSON object:
+
+        {
+          "food_name": "specific food name",
+          "estimated_quantity": "e.g. 1 cup cooked rice, 200g chicken",
+          "calories": 450,
+          "protein_g": 28.0,
+          "carbs_g": 45.0,
+          "fat_g": 14.0,
+          "fiber_g": 3.0,
+          "confidence": "high",
+          "notes": "brief note on assumptions or portion estimate",
+          "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string"
+        }
+        """
+
+        let body: [String: Any] = [
+            "model": Config.openRouterModelID,
+            "max_tokens": 512,
+            "messages": [[
+                "role": "user",
+                "content": [
+                    [
+                        "type": "text",
+                        "text": prompt
+                    ],
+                    [
+                        "type": "image_url",
+                        "image_url": [
+                            "url": "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
+                        ]
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestOpenRouterResult(body: body)
+    }
+
+    private static func analyzeTextWithOpenRouter(description: String) async throws -> NutritionResult {
+        let prompt = """
+        The user described their food as: "\(description)"
+
+        Return ONLY a valid JSON object:
+
+        {
+          "food_name": "specific food name",
+          "estimated_quantity": "typical serving",
+          "calories": 450,
+          "protein_g": 28.0,
+          "carbs_g": 45.0,
+          "fat_g": 14.0,
+          "fiber_g": 3.0,
+          "confidence": "medium",
+          "notes": "brief note on assumptions or portion estimate",
+          "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string"
+        }
+        """
+
+        let body: [String: Any] = [
+            "model": Config.openRouterModelID,
+            "max_tokens": 512,
+            "messages": [[
+                "role": "user",
+                "content": prompt
+            ]]
+        ]
+
+        return try await requestOpenRouterResult(body: body)
+    }
+
+    private static func requestAnthropicResult(body: [String: Any], providerName: String, modelUsed: String) async throws -> NutritionResult {
+        guard !Config.anthropicAPIKey.isEmpty else {
+            throw ClaudeError.missingAPIKey
+        }
+
+        var request = URLRequest(url: anthropicURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Config.anthropicAPIKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        struct APIResponse: Decodable {
+            struct Block: Decodable {
+                let type: String
+                let text: String
+            }
+
+            let content: [Block]
+        }
+
+        let apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
+
+        guard let text = apiResponse.content.first?.text else {
+            throw ClaudeError.noContent
+        }
+
+        return try parse(text, providerName: providerName, modelUsed: modelUsed)
+    }
+
+    private static func requestGeminiResult(body: [String: Any], modelUsed: String) async throws -> NutritionResult {
+        guard !Config.geminiAPIKey.isEmpty else {
+            throw ClaudeError.missingAPIKey
+        }
+
+        guard let model = Config.geminiModelID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
+            throw ClaudeError.parseError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Config.geminiAPIKey, forHTTPHeaderField: "x-goog-api-key")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        struct GeminiResponse: Decodable {
+            struct Candidate: Decodable {
+                struct Content: Decodable {
+                    struct Part: Decodable {
+                        let text: String?
+                    }
+
+                    let parts: [Part]
+                }
+
+                let content: Content?
+            }
+
+            let candidates: [Candidate]?
+        }
+
+        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+        let text = decoded.candidates?
+            .first?
+            .content?
+            .parts
+            .compactMap { $0.text }
+            .joined(separator: "\n") ?? ""
+
+        guard !text.isEmpty else {
+            throw ClaudeError.noContent
+        }
+
+        return try parse(text, providerName: AIProvider.gemini.displayName, modelUsed: modelUsed)
+    }
+
+    private static func requestOpenAIResult(body: [String: Any], modelUsed: String) async throws -> NutritionResult {
+        guard !Config.openAIAPIKey.isEmpty else {
+            throw ClaudeError.missingAPIKey
+        }
+
+        var request = URLRequest(url: openAIURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(Config.openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        struct OpenAIResponse: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    let content: String?
+                }
+
+                let message: Message
+            }
+
+            let choices: [Choice]
+        }
+
+        let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+        guard let text = decoded.choices.first?.message.content, !text.isEmpty else {
+            throw ClaudeError.noContent
+        }
+
+        return try parse(text, providerName: AIProvider.openAI.displayName, modelUsed: modelUsed)
+    }
+
+    private static func requestOpenRouterResult(body: [String: Any]) async throws -> NutritionResult {
+        guard !Config.openRouterAPIKey.isEmpty else {
+            throw ClaudeError.missingAPIKey
+        }
+
+        let (data, response) = try await performOpenRouterRequest(body: body)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404,
+               let selectedModel = body["model"] as? String,
+               selectedModel != OpenRouterModel.freeRouter.id {
+                var fallbackBody = body
+                fallbackBody["model"] = OpenRouterModel.freeRouter.id
+                let (fallbackData, fallbackResponse) = try await performOpenRouterRequest(body: fallbackBody)
+
+                guard let fallbackHTTP = fallbackResponse as? HTTPURLResponse else {
+                    throw ClaudeError.networkError
+                }
+
+                guard fallbackHTTP.statusCode == 200 else {
+                    let fallbackBodyText = String(data: fallbackData, encoding: .utf8) ?? ""
+                    throw ClaudeError.apiError(fallbackHTTP.statusCode, fallbackBodyText)
+                }
+
+                return try decodeOpenRouterResult(
+                    from: fallbackData,
+                    providerName: AIProvider.openRouter.displayName,
+                    modelUsed: OpenRouterModel.freeRouter.id
+                )
+            }
+
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ClaudeError.apiError(http.statusCode, body)
+        }
+
+        let selectedModel = (body["model"] as? String) ?? Config.openRouterModelID
+        return try decodeOpenRouterResult(
+            from: data,
+            providerName: AIProvider.openRouter.displayName,
+            modelUsed: selectedModel
+        )
+    }
+
+    private static func performOpenRouterRequest(body: [String: Any]) async throws -> (Data, URLResponse) {
+        var request = URLRequest(url: openRouterChatURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(Config.openRouterAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Kidney Foods", forHTTPHeaderField: "X-Title")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return try await URLSession.shared.data(for: request)
+    }
+
+    private static func decodeOpenRouterResult(from data: Data, providerName: String, modelUsed: String) throws -> NutritionResult {
+        struct OpenRouterResponse: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    let content: String
+                }
+
+                let message: Message
+            }
+
+            let choices: [Choice]
+        }
+
+        let decoded: OpenRouterResponse
+        do {
+            decoded = try JSONDecoder().decode(OpenRouterResponse.self, from: data)
+        } catch {
+            throw ClaudeError.incompatibleModel
+        }
+        guard let text = decoded.choices.first?.message.content else {
+            throw ClaudeError.incompatibleModel
+        }
+
+        do {
+            return try parse(text, providerName: providerName, modelUsed: modelUsed)
+        } catch {
+            throw ClaudeError.incompatibleModel
+        }
+    }
+
+    private static func resize(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let longest = max(size.width, size.height)
+
+        guard longest > maxDimension else { return image }
+
+        let scale = maxDimension / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+    }
+
+    private static func parse(_ text: String, providerName: String, modelUsed: String) throws -> NutritionResult {
+        guard let start = text.firstIndex(of: "{"),
+              let end = text.lastIndex(of: "}") else {
+            throw ClaudeError.parseError
+        }
+
+        let jsonString = String(text[start...end])
+        guard let data = jsonString.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ClaudeError.parseError
+        }
+
+        func double(_ key: String) -> Double {
+            if let value = json[key] as? Double { return value }
+            if let value = json[key] as? Int { return Double(value) }
+            return 0
+        }
+
+        func int(_ key: String) -> Int {
+            if let value = json[key] as? Int { return value }
+            if let value = json[key] as? Double { return Int(value) }
+            return 0
+        }
+
+        return NutritionResult(
+            foodName: json["food_name"] as? String ?? "Unknown food",
+            estimatedQuantity: json["estimated_quantity"] as? String ?? "",
+            calories: int("calories"),
+            proteinG: double("protein_g"),
+            carbsG: double("carbs_g"),
+            fatG: double("fat_g"),
+            fiberG: double("fiber_g"),
+            confidence: json["confidence"] as? String ?? "medium",
+            notes: json["notes"] as? String ?? "",
+            kidneyWarning: json["kidney_warning"] as? String ?? "",
+            heartWarning: json["heart_warning"] as? String ?? "",
+            providerName: providerName,
+            modelUsed: modelUsed
+        )
+    }
+
+    private static var imageNutritionPrompt: String {
+        """
+    Analyze this food image and return ONLY a valid JSON object:
+
+    {
+      "food_name": "specific food name",
+      "estimated_quantity": "e.g. 1 cup cooked rice, 200g chicken",
+      "calories": 450,
+      "protein_g": 28.0,
+      "carbs_g": 45.0,
+      "fat_g": 14.0,
+      "fiber_g": 3.0,
+      "confidence": "high",
+      "notes": "brief note on assumptions or portion estimate",
+      "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string",
+      "heart_warning": "brief warning for someone focused on heart health, otherwise empty string"
+    }
+
+    \(healthWarningRules)
+    """
+    }
+
+    private static func textNutritionPrompt(for description: String) -> String {
+        """
+        The user described their food as: "\(description)"
+
+        Return ONLY a valid JSON object:
+
+        {
+          "food_name": "specific food name",
+          "estimated_quantity": "typical serving",
+          "calories": 450,
+          "protein_g": 28.0,
+          "carbs_g": 45.0,
+          "fat_g": 14.0,
+          "fiber_g": 3.0,
+          "confidence": "medium",
+          "notes": "brief note on assumptions or portion estimate",
+          "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string",
+          "heart_warning": "brief warning for someone focused on heart health, otherwise empty string"
+        }
+
+        \(healthWarningRules)
+        """
+    }
+
+    private static var healthWarningRules: String {
+        var rules: [String] = [
+            "- All numeric fields must be numbers, not strings",
+            "- calories must be an integer"
+        ]
+
+        if Config.kidneyChecksEnabled {
+            rules.append("- If the food appears risky for kidney disease because it is high in sodium, potassium, phosphorus, or otherwise commonly restricted, set kidney_warning to a short warning. Otherwise set kidney_warning to an empty string.")
+        } else {
+            rules.append("- Set kidney_warning to an empty string.")
+        }
+
+        if Config.heartChecksEnabled {
+            rules.append("- If the food appears risky for heart health because it is high in sodium, saturated fat, trans fat, or heavily processed, set heart_warning to a short warning. Otherwise set heart_warning to an empty string.")
+        } else {
+            rules.append("- Set heart_warning to an empty string.")
+        }
+
+        return rules.joined(separator: "\n")
+    }
+}
+
+private enum ClaudeError: LocalizedError {
+    case missingAPIKey
+    case imageEncodingFailed
+    case networkError
+    case apiError(Int, String)
+    case noContent
+    case parseError
+    case incompatibleModel
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey:
+            switch Config.selectedProvider {
+            case .anthropic:
+                return "Add your Anthropic API key in Settings."
+            case .gemini:
+                return "Add your Google Gemini API key in Settings."
+            case .openAI:
+                return "Add your OpenAI API key in Settings."
+            case .openRouter:
+                return "Add your OpenRouter API key in Settings."
+            }
+        case .imageEncodingFailed:
+            return "Could not encode image."
+        case .networkError:
+            return "Network error."
+        case .apiError(let code, let body):
+            if code == 404 {
+                return "API error 404. The selected model or endpoint was not found for the current provider."
+            }
+            if code == 402 {
+                return "API error 402. This model may require payment or credits on the current provider."
+            }
+            if body.isEmpty {
+                return "API error \(code)."
+            }
+            return "API error \(code): \(body)"
+        case .noContent:
+            return "No content returned."
+        case .parseError:
+            return "Could not parse the AI response."
+        case .incompatibleModel:
+            return "Incompatible Model - Choose Another Model"
+        }
+    }
+}
+
+private struct GuideCard: View {
+    let group: FoodGroup
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: group.systemImage)
+                    .foregroundStyle(group.tint)
+                Text(group.title)
+                    .font(.headline)
+            }
+
+            ForEach(group.items, id: \.self) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    Circle()
+                        .fill(group.tint)
+                        .frame(width: 7, height: 7)
+                        .padding(.top, 6)
+                    Text(item)
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct MenuPlanCard: View {
+    let plan: MenuPlan
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(plan.title)
+                .font(.headline)
+
+            ForEach(plan.meals) { meal in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(meal.name)
+                        .font(.subheadline.weight(.semibold))
+                    Text(meal.items)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct MedicationPageCard: View {
+    let page: MedicationPage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: page.systemImage)
+                    .foregroundStyle(page.tint)
+                Text(page.title)
+                    .font(.headline)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(page.subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct MedicationDetailView: View {
+    let page: MedicationPage
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label(page.title, systemImage: page.systemImage)
+                        .font(.title.bold())
+                        .foregroundStyle(page.tint)
+                    Text(page.summary)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [page.tint.opacity(0.16), Color.blue.opacity(0.08)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+
+                MedicationSectionCard(
+                    title: "Usually Better Or Commonly Used",
+                    tint: .green,
+                    items: page.safeItems
+                )
+
+                MedicationSectionCard(
+                    title: "Use Caution Or Ask First",
+                    tint: .orange,
+                    items: page.cautionItems
+                )
+            }
+            .padding(20)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(page.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct MedicationSectionCard: View {
+    let title: String
+    let tint: Color
+    let items: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(tint)
+
+            ForEach(items, id: \.self) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 7, height: 7)
+                        .padding(.top, 6)
+                    Text(item)
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct ImagePicker: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
+    var onImage: (UIImage) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: ImagePicker
+
+        init(parent: ImagePicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onImage(image)
+            }
+
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+
+private func format(_ value: Double) -> String {
+    if value.truncatingRemainder(dividingBy: 1) == 0 {
+        return "\(Int(value))"
+    }
+
+    return String(format: "%.1f", value)
+}
+
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: FoodEntry.self, inMemory: true)
 }

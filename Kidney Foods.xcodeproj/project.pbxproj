@@ -256,6 +256,9 @@
 				DEVELOPMENT_TEAM = 6Y76544BT6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MealVue;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Take meal photos for food logging.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Choose meal photos from your library for food logging.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -267,7 +270,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "Inphase.Kidney-Foods";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = MealVue;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -288,6 +291,9 @@
 				DEVELOPMENT_TEAM = 6Y76544BT6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MealVue;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Take meal photos for food logging.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Choose meal photos from your library for food logging.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -299,7 +305,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "Inphase.Kidney-Foods";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = MealVue;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
