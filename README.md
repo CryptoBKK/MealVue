@@ -8,6 +8,7 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
 - Text meal description analysis
 - Daily log and history views backed by SwiftData
 - Startup loading screen instead of a blank first-launch white screen
+- Non-blocking startup so the loading screen appears while the data stack initializes
 - AI provider support for:
   - Anthropic
   - Google Gemini
@@ -52,6 +53,7 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
 
 - If no API key is configured, the app still supports manual meal entry.
 - OpenRouter free models may be temporarily unavailable. The app falls back to `openrouter/free` when possible.
+- Photo analysis includes extra startup stabilization and retry handling to reduce first-attempt failures after taking a picture.
 - Health warnings are controlled by the toggles in `Settings`.
 - The app displays which provider and model produced each AI analysis result.
 - Sodium, potassium, phosphorus, and protein targets can be manually overridden in `Settings`.

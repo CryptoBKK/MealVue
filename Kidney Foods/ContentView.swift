@@ -183,7 +183,10 @@ private struct LogFoodView: View {
         }
         .sheet(isPresented: $showCamera) {
             ImagePicker(sourceType: .camera) { image in
-                pendingImage = IdentifiableImage(image: image)
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    pendingImage = IdentifiableImage(image: image)
+                }
             }
             .ignoresSafeArea()
         }
@@ -1170,6 +1173,7 @@ private struct PhotoAnalysisView: View {
     @State private var confidence = "manual"
     @State private var modelUsed = ""
     @State private var providerUsed = ""
+    @State private var didStartAnalysis = false
 
     init(image: UIImage, onSave: @escaping () -> Void) {
         self.image = image
@@ -1249,7 +1253,7 @@ private struct PhotoAnalysisView: View {
                         )
                     case .error(let message):
                         ErrorStateView(message: message) {
-                            Task { await analyze() }
+                            Task { await analyzeWithRetries() }
                         }
                     }
                 }
@@ -1269,22 +1273,55 @@ private struct PhotoAnalysisView: View {
                 }
             }
         }
-        .task {
-            guard Config.isConfigured else { return }
-            await analyze()
+        .onAppear {
+            guard Config.isConfigured, !didStartAnalysis else { return }
+            didStartAnalysis = true
+
+            Task {
+                await analyzeWithRetries()
+            }
         }
     }
 
-    private func analyze() async {
+    private func analyzeWithRetries() async {
+        do {
+            try await Task.sleep(for: .milliseconds(250))
+        } catch {
+            return
+        }
+
+        let retryDelays: [UInt64] = [0, 500_000_000, 1_000_000_000]
+
+        for (index, delay) in retryDelays.enumerated() {
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+
+            do {
+                try Task.checkCancellation()
+                try await analyze()
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                if index == retryDelays.count - 1 {
+                    phase = .error(error.localizedDescription)
+                    return
+                }
+            }
+        }
+    }
+
+    private func analyze() async throws {
         phase = .analyzing
 
-        do {
-            let result = try await ClaudeService.analyzeFood(image: image)
-            apply(result: result)
-            phase = .editing
-        } catch {
-            phase = .error(error.localizedDescription)
-        }
+        let result = try await ClaudeService.analyzeFood(image: image)
+        apply(result: result)
+        phase = .editing
     }
 
     private func apply(result: NutritionResult) {

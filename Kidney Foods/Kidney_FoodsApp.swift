@@ -12,9 +12,45 @@ import SwiftData
 struct Kidney_FoodsApp: App {
     @State private var isReady = false
     @State private var minimumElapsed = false
-    @State private var contentAppeared = false
+    @State private var modelContainer: ModelContainer?
 
-    var sharedModelContainer: ModelContainer = {
+    var body: some Scene {
+        WindowGroup {
+            ZStack {
+                if let modelContainer {
+                    ContentView {
+                        maybeReady()
+                    }
+                    .modelContainer(modelContainer)
+                }
+
+                if !isReady {
+                    LaunchView()
+                        .transition(.opacity)
+                        .zIndex(1)
+                }
+            }
+            .task {
+                try? await Task.sleep(for: .milliseconds(900))
+                minimumElapsed = true
+                maybeReady()
+            }
+            .task {
+                guard modelContainer == nil else { return }
+                modelContainer = makeModelContainer()
+                maybeReady()
+            }
+        }
+    }
+
+    private func maybeReady() {
+        guard minimumElapsed, modelContainer != nil, !isReady else { return }
+        withAnimation(.easeOut(duration: 0.35)) {
+            isReady = true
+        }
+    }
+
+    private func makeModelContainer() -> ModelContainer {
         let schema = Schema([
             FoodEntry.self,
         ])
@@ -30,36 +66,6 @@ struct Kidney_FoodsApp: App {
             } catch {
                 fatalError("Could not create fallback ModelContainer: \(error)")
             }
-        }
-    }()
-
-    var body: some Scene {
-        WindowGroup {
-            ZStack {
-                ContentView {
-                    contentAppeared = true
-                    maybeReady()
-                }
-
-                if !isReady {
-                    LaunchView()
-                        .transition(.opacity)
-                        .zIndex(1)
-                }
-            }
-            .task {
-                try? await Task.sleep(for: .milliseconds(900))
-                minimumElapsed = true
-                maybeReady()
-            }
-        }
-        .modelContainer(sharedModelContainer)
-    }
-
-    private func maybeReady() {
-        guard minimumElapsed, contentAppeared, !isReady else { return }
-        withAnimation(.easeOut(duration: 0.35)) {
-            isReady = true
         }
     }
 }
