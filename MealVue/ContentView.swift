@@ -831,6 +831,7 @@ private struct SettingsView: View {
     @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
     @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
 
+    @Environment(\.modelContext) private var modelContext
     @State private var showAnthropicKey = false
     @State private var showGeminiKey = false
     @State private var showOpenAIKey = false
@@ -1061,6 +1062,31 @@ private struct SettingsView: View {
                     }
 
                     Text(recommendedTargetSummary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Demo Data") {
+                    Button("Load Thai Sample Data (Somchai, Stage 3)") {
+                        SampleDataGenerator.loadSampleData(into: modelContext)
+                        // Auto-set Somchai's profile for testing
+                        ckdStageRaw = CKDStage.stage3to4.rawValue
+                        proteinTargetG = "80"
+                        sodiumTargetMg = "2000"
+                        potassiumTargetMg = "3000"
+                        phosphorusTargetMg = "1000"
+                        userAge = "58"
+                        userSex = UserSex.male.rawValue
+                        userWeightKg = "72"
+                        userHeightCm = "168"
+                    }
+
+                    Button("Clear Sample Data") {
+                        SampleDataGenerator.clearSampleData(from: modelContext)
+                    }
+                    .foregroundStyle(.red)
+
+                    Text("Loads 30 days of Thai meal entries with Somchai's CKD Stage 3 profile. Clears only sample entries.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
