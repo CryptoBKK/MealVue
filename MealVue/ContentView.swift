@@ -230,20 +230,29 @@ private struct HistoryView: View {
                         description: Text("Captured and manually logged meals will appear here.")
                     )
                 } else {
-                    ForEach(groupedEntries, id: \.date) { section in
-                        Section(section.title) {
-                            ForEach(section.entries) { entry in
-                                NavigationLink {
-                                    FoodEntryDetailView(entry: entry)
-                                } label: {
-                                    FoodEntryRow(entry: entry)
-                                }
+                    Section("Days") {
+                        ForEach(groupedEntries, id: \.date) { section in
+                            NavigationLink {
+                                DayHistoryView(section: section)
+                            } label: {
+                                DayHistoryRow(section: section)
                             }
                         }
                     }
                 }
             }
             .navigationTitle("History")
+            .toolbar {
+                if !entries.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink {
+                            DailyNutritionReportView(entries: entries)
+                        } label: {
+                            Label("Report", systemImage: "doc.richtext")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -255,6 +264,226 @@ private struct HistoryView: View {
         return grouped.keys.sorted(by: >).map { date in
             HistorySection(date: date, entries: grouped[date] ?? [])
         }
+    }
+}
+
+private struct DayHistoryView: View {
+    let section: HistorySection
+
+    var body: some View {
+        List {
+            Section {
+                TotalsCard(totals: section.totals)
+            }
+
+            Section("Meals") {
+                ForEach(section.entries) { entry in
+                    NavigationLink {
+                        FoodEntryDetailView(entry: entry)
+                    } label: {
+                        FoodEntryRow(entry: entry)
+                    }
+                }
+            }
+        }
+        .navigationTitle(section.shortTitle)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct DayHistoryRow: View {
+    let section: HistorySection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(section.title)
+                        .font(.headline)
+                    Text("\(section.entries.count) meals")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(section.totals.calories) kcal")
+                    .font(.headline)
+                    .foregroundStyle(.green)
+            }
+
+            HStack(spacing: 10) {
+                ReportMetricChip(title: "Protein", value: "\(Int(section.totals.proteinG)) g", tint: .blue)
+                ReportMetricChip(title: "Sodium", value: "\(Int(section.totals.sodiumMg)) mg", tint: .orange)
+                ReportMetricChip(title: "Potassium", value: "\(Int(section.totals.potassiumMg)) mg", tint: .yellow)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct DailyNutritionReportView: View {
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+    @AppStorage("ckdStage") private var ckdStageRaw = CKDStage.notSpecified.rawValue
+    @AppStorage("userWeightKg") private var userWeightKg = ""
+    @AppStorage("proteinTargetG") private var proteinTargetG = ""
+    @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
+    @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
+    @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
+
+    let entries: [FoodEntry]
+
+    @State private var startDate: Date
+    @State private var endDate: Date
+    @State private var reportURL: URL?
+    @State private var reportError = ""
+
+    init(entries: [FoodEntry]) {
+        self.entries = entries
+
+        let sortedDates = entries.map(\.timestamp).sorted()
+        let minDate = sortedDates.first ?? Date()
+        let maxDate = sortedDates.last ?? Date()
+        let calendar = Calendar.current
+        let defaultStart = max(
+            calendar.startOfDay(for: minDate),
+            calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: maxDate)) ?? calendar.startOfDay(for: minDate)
+        )
+
+        _startDate = State(initialValue: defaultStart)
+        _endDate = State(initialValue: maxDate)
+    }
+
+    private var selectedCKDStage: CKDStage {
+        CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
+    }
+
+    private var reportTargets: NutritionTargets {
+        NutritionTargets(
+            proteinG: parsedTarget(proteinTargetG) ?? RecommendedTargets.defaultProteinG(
+                for: selectedCKDStage,
+                weightKg: Double(userWeightKg.trimmingCharacters(in: .whitespacesAndNewlines))
+            ),
+            sodiumMg: parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled),
+            potassiumMg: parsedTarget(potassiumTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage) : nil),
+            phosphorusMg: parsedTarget(phosphorusTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage) : nil)
+        )
+    }
+
+    private var filteredSections: [HistorySection] {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: min(startDate, endDate))
+        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: max(startDate, endDate))) ?? Date()
+
+        let filteredEntries = entries.filter { entry in
+            entry.timestamp >= start && entry.timestamp < end
+        }
+
+        let grouped = Dictionary(grouping: filteredEntries) { entry in
+            calendar.startOfDay(for: entry.timestamp)
+        }
+
+        return grouped.keys.sorted(by: >).map { date in
+            HistorySection(date: date, entries: grouped[date] ?? [])
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("Date Range") {
+                DatePicker("Start", selection: $startDate, displayedComponents: .date)
+                DatePicker("End", selection: $endDate, displayedComponents: .date)
+
+                Button("Create PDF Report") {
+                    generateReport()
+                }
+                .disabled(filteredSections.isEmpty)
+
+                if let reportURL {
+                    ShareLink(item: reportURL) {
+                        Label("Share Latest PDF", systemImage: "square.and.arrow.up")
+                    }
+                }
+
+                if !reportError.isEmpty {
+                    Text(reportError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Included Days") {
+                if filteredSections.isEmpty {
+                    Text("No entries in this date range.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(filteredSections, id: \.date) { section in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(section.title)
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(section.totals.calories) kcal")
+                                    .font(.headline)
+                                    .foregroundStyle(.green)
+                            }
+
+                            HStack(spacing: 10) {
+                                ReportMetricChip(title: "Protein", value: "\(Int(section.totals.proteinG)) g", tint: .blue)
+                                ReportMetricChip(title: "Sodium", value: "\(Int(section.totals.sodiumMg)) mg", tint: .orange)
+                                ReportMetricChip(title: "Potassium", value: "\(Int(section.totals.potassiumMg)) mg", tint: .yellow)
+                                ReportMetricChip(title: "Phosphorus", value: "\(Int(section.totals.phosphorusMg)) mg", tint: .purple)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Daily Report")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func generateReport() {
+        do {
+            reportURL = try NutritionReportPDF.writeReport(
+                for: filteredSections.sorted(by: { $0.date < $1.date }),
+                startDate: min(startDate, endDate),
+                endDate: max(startDate, endDate),
+                targets: reportTargets
+            )
+            reportError = ""
+        } catch {
+            reportError = "Could not create the PDF report."
+        }
+    }
+
+    private func parsedTarget(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Double(trimmed)
+    }
+}
+
+private struct ReportMetricChip: View {
+    let title: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(tint.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -588,7 +817,7 @@ private struct SettingsView: View {
     @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
     @AppStorage("openAIModelID") private var openAIModelID = OpenAIModel.defaultModel.id
     @AppStorage("openRouterAPIKey") private var openRouterAPIKey = ""
-    @AppStorage("openRouterModelID") private var openRouterModelID = "openrouter/free"
+    @AppStorage("openRouterModelID") private var openRouterModelID = OpenRouterModel.autoRouter.id
     @AppStorage("aiProvider") private var aiProviderRaw = AIProvider.anthropic.rawValue
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
@@ -610,7 +839,7 @@ private struct SettingsView: View {
     @FocusState private var focusedField: SettingsField?
     @State private var geminiModels: [GeminiModel] = GeminiModel.defaults
     @State private var openAIModels: [OpenAIModel] = OpenAIModel.defaults
-    @State private var openRouterModels: [OpenRouterModel] = [.freeRouter]
+    @State private var openRouterModels: [OpenRouterModel] = [.autoRouter, .freeRouter]
     @State private var isLoadingGeminiModels = false
     @State private var isLoadingOpenAIModels = false
     @State private var isLoadingModels = false
@@ -620,6 +849,10 @@ private struct SettingsView: View {
 
     private var selectedProvider: AIProvider {
         AIProvider(rawValue: aiProviderRaw) ?? .anthropic
+    }
+
+    private var selectedOpenRouterModel: OpenRouterModel? {
+        openRouterModels.first(where: { $0.id == openRouterModelID })
     }
 
     private var selectedCKDStage: CKDStage {
@@ -735,7 +968,7 @@ private struct SettingsView: View {
                             field: .openRouterKey
                         )
 
-                        Button(isLoadingModels ? "Loading Models..." : "Refresh Free Models") {
+                        Button(isLoadingModels ? "Loading Models..." : "Refresh OpenRouter Models") {
                             Task { await loadOpenRouterModels() }
                         }
                         .disabled(openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoadingModels)
@@ -744,10 +977,16 @@ private struct SettingsView: View {
                             ProgressView()
                         }
 
-                        Picker("Free Model", selection: $openRouterModelID) {
+                        Picker("OpenRouter Model", selection: $openRouterModelID) {
                             ForEach(openRouterModels) { model in
-                                Text(model.displayName).tag(model.id)
+                                Text(openRouterPickerLabel(for: model)).tag(model.id)
                             }
+                        }
+
+                        if let selectedOpenRouterModel, !selectedOpenRouterModel.supportsVision {
+                            Text("This model appears to be text-only. It may fail on food photo analysis, but can still work for text meal descriptions.")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
                         }
 
                         if !openRouterError.isEmpty {
@@ -756,7 +995,7 @@ private struct SettingsView: View {
                                 .foregroundStyle(.orange)
                         }
 
-                        Text("Uses OpenRouter's chat completions API. The list above is loaded from OpenRouter's current models API and filtered to free text models.")
+                        Text("Uses OpenRouter's chat completions API. Vision-capable models are marked for food photo analysis, and text-only models are still available for manual meal descriptions.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -848,7 +1087,7 @@ private struct SettingsView: View {
                     await loadOpenAIModels()
                 }
 
-                guard selectedProvider == .openRouter, openRouterModels.count <= 1, !openRouterAPIKey.isEmpty else { return }
+                guard selectedProvider == .openRouter, openRouterModels.count <= 2, !openRouterAPIKey.isEmpty else { return }
                 await loadOpenRouterModels()
             }
             .toolbar {
@@ -872,7 +1111,7 @@ private struct SettingsView: View {
     private func loadOpenRouterModels() async {
         let key = openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
-            openRouterModels = [.freeRouter]
+            openRouterModels = [.autoRouter, .freeRouter]
             openRouterError = ""
             return
         }
@@ -881,19 +1120,31 @@ private struct SettingsView: View {
         defer { isLoadingModels = false }
 
         do {
-            let fetched = try await ClaudeService.fetchOpenRouterFreeModels(apiKey: key)
-            openRouterModels = fetched.isEmpty ? [.freeRouter] : fetched
+            let fetched = try await ClaudeService.fetchOpenRouterModels(apiKey: key)
+            openRouterModels = fetched.isEmpty ? [.autoRouter, .freeRouter] : fetched
 
             if !openRouterModels.contains(where: { $0.id == openRouterModelID }) {
-                openRouterModelID = openRouterModels.first?.id ?? "openrouter/free"
+                openRouterModelID = openRouterModels.first?.id ?? OpenRouterModel.autoRouter.id
             }
 
-            openRouterError = fetched.isEmpty ? "No free models were returned for this key. Falling back to OpenRouter Free Router." : ""
+            openRouterError = fetched.isEmpty ? "No OpenRouter models were returned for this key. Auto Router and Free Router are still available." : ""
         } catch {
-            openRouterModels = [.freeRouter]
-            openRouterModelID = "openrouter/free"
+            openRouterModels = [.autoRouter, .freeRouter]
+            openRouterModelID = OpenRouterModel.autoRouter.id
             openRouterError = error.localizedDescription
         }
+    }
+
+    private func openRouterPickerLabel(for model: OpenRouterModel) -> String {
+        if model.isRouter {
+            return model.displayName
+        }
+
+        if model.supportsVision {
+            return "\(model.displayName) • Vision"
+        }
+
+        return "\(model.displayName) • Text Only"
     }
 
     private func loadGeminiModels() async {
@@ -1251,6 +1502,17 @@ private struct PhotoAnalysisView: View {
                             phosphorus: $phosphorus,
                             notes: $notes
                         )
+
+                        if Config.isConfigured {
+                            Button {
+                                Task { await redoAnalysisWithRetries() }
+                            } label: {
+                                Label("AI Redo", systemImage: "arrow.clockwise")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.horizontal)
+                        }
                     case .error(let message):
                         ErrorStateView(message: message) {
                             Task { await analyzeWithRetries() }
@@ -1284,13 +1546,25 @@ private struct PhotoAnalysisView: View {
     }
 
     private func analyzeWithRetries() async {
+        await runAnalysisWithRetries {
+            try await analyze()
+        }
+    }
+
+    private func redoAnalysisWithRetries() async {
+        await runAnalysisWithRetries {
+            try await redoAnalysis()
+        }
+    }
+
+    private func runAnalysisWithRetries(_ operation: @escaping () async throws -> Void) async {
         do {
-            try await Task.sleep(for: .milliseconds(250))
+            try await Task.sleep(for: .milliseconds(initialAnalysisDelayMS))
         } catch {
             return
         }
 
-        let retryDelays: [UInt64] = [0, 500_000_000, 1_000_000_000]
+        let retryDelays = analysisRetryDelaysNS
 
         for (index, delay) in retryDelays.enumerated() {
             if delay > 0 {
@@ -1303,7 +1577,7 @@ private struct PhotoAnalysisView: View {
 
             do {
                 try Task.checkCancellation()
-                try await analyze()
+                try await operation()
                 return
             } catch is CancellationError {
                 return
@@ -1316,12 +1590,59 @@ private struct PhotoAnalysisView: View {
         }
     }
 
+    private var initialAnalysisDelayMS: Int {
+        Config.selectedProvider == .openRouter ? 150 : 600
+    }
+
+    private var analysisRetryDelaysNS: [UInt64] {
+        if Config.selectedProvider == .openRouter {
+            return [
+                0,
+                500_000_000,
+                1_000_000_000
+            ]
+        }
+
+        return [
+            0,
+            1_000_000_000,
+            2_000_000_000,
+            3_000_000_000
+        ]
+    }
+
     private func analyze() async throws {
         phase = .analyzing
 
         let result = try await ClaudeService.analyzeFood(image: image)
         apply(result: result)
         phase = .editing
+    }
+
+    private func redoAnalysis() async throws {
+        phase = .analyzing
+
+        let result = try await ClaudeService.analyzeFood(
+            image: image,
+            correctedDescription: correctedDescription
+        )
+        apply(result: result)
+        phase = .editing
+    }
+
+    private var correctedDescription: String {
+        let trimmedFoodName = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedQuantity = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedFoodName.isEmpty {
+            return trimmedQuantity
+        }
+
+        if trimmedQuantity.isEmpty {
+            return trimmedFoodName
+        }
+
+        return "\(trimmedQuantity) of \(trimmedFoodName)"
     }
 
     private func apply(result: NutritionResult) {
@@ -2032,6 +2353,14 @@ private struct HistorySection {
     var title: String {
         date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
     }
+
+    var shortTitle: String {
+        date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    var totals: NutritionTotals {
+        NutritionTotals(entries: entries)
+    }
 }
 
 private struct NutritionTotals {
@@ -2055,6 +2384,143 @@ private struct NutritionTotals {
         potassiumMg = entries.reduce(0) { $0 + $1.potassiumMg }
         phosphorusMg = entries.reduce(0) { $0 + $1.phosphorusMg }
         entriesCount = entries.count
+    }
+}
+
+private struct NutritionTargets {
+    let proteinG: Double
+    let sodiumMg: Double
+    let potassiumMg: Double?
+    let phosphorusMg: Double?
+}
+
+private enum NutritionReportPDF {
+    static func writeReport(
+        for sections: [HistorySection],
+        startDate: Date,
+        endDate: Date,
+        targets: NutritionTargets
+    ) throws -> URL {
+        let data = renderReport(
+            for: sections,
+            startDate: startDate,
+            endDate: endDate,
+            targets: targets
+        )
+
+        let fileName = "MealVue-Daily-Report-\(fileStamp(from: startDate))-\(fileStamp(from: endDate)).pdf"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private static func renderReport(
+        for sections: [HistorySection],
+        startDate: Date,
+        endDate: Date,
+        targets: NutritionTargets
+    ) -> Data {
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let margin: CGFloat = 40
+        let contentWidth = pageRect.width - (margin * 2)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+
+        return renderer.pdfData { context in
+            var currentY: CGFloat = 0
+
+            func beginPage() {
+                context.beginPage()
+                currentY = margin
+            }
+
+            func ensureSpace(_ height: CGFloat) {
+                if currentY + height > pageRect.height - margin {
+                    beginPage()
+                }
+            }
+
+            func drawLine(_ text: String, font: UIFont, color: UIColor = .label, spacingAfter: CGFloat = 8) {
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: font,
+                    .foregroundColor: color
+                ]
+                let rect = NSString(string: text).boundingRect(
+                    with: CGSize(width: contentWidth, height: .greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: attributes,
+                    context: nil
+                )
+                ensureSpace(rect.height + spacingAfter)
+                NSString(string: text).draw(
+                    in: CGRect(x: margin, y: currentY, width: contentWidth, height: rect.height),
+                    withAttributes: attributes
+                )
+                currentY += rect.height + spacingAfter
+            }
+
+            beginPage()
+            drawLine("MealVue Daily Nutrition Report", font: .boldSystemFont(ofSize: 24), spacingAfter: 10)
+            drawLine(
+                "\(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))",
+                font: .systemFont(ofSize: 13),
+                color: .secondaryLabel,
+                spacingAfter: 18
+            )
+            drawLine("Targets", font: .boldSystemFont(ofSize: 16), spacingAfter: 8)
+            drawLine("Protein: \(Int(targets.proteinG)) g/day", font: .systemFont(ofSize: 12), spacingAfter: 4)
+            drawLine("Sodium: \(Int(targets.sodiumMg)) mg/day", font: .systemFont(ofSize: 12), spacingAfter: 4)
+            drawLine(
+                "Potassium: \(targets.potassiumMg.map { "\(Int($0)) mg/day" } ?? "Tracking only")",
+                font: .systemFont(ofSize: 12),
+                spacingAfter: 4
+            )
+            drawLine(
+                "Phosphorus: \(targets.phosphorusMg.map { "\(Int($0)) mg/day" } ?? "Tracking only")",
+                font: .systemFont(ofSize: 12),
+                spacingAfter: 18
+            )
+
+            for section in sections {
+                ensureSpace(130)
+                drawLine(section.title, font: .boldSystemFont(ofSize: 16), spacingAfter: 6)
+                drawLine(
+                    "Meals: \(section.entries.count)    Calories: \(section.totals.calories) kcal",
+                    font: .systemFont(ofSize: 12),
+                    spacingAfter: 4
+                )
+                drawLine(
+                    "Protein: \(Int(section.totals.proteinG)) g\(markerIfHigh(section.totals.proteinG, threshold: targets.proteinG))",
+                    font: .systemFont(ofSize: 12),
+                    spacingAfter: 4
+                )
+                drawLine(
+                    "Sodium: \(Int(section.totals.sodiumMg)) mg\(markerIfHigh(section.totals.sodiumMg, threshold: targets.sodiumMg))",
+                    font: .systemFont(ofSize: 12),
+                    spacingAfter: 4
+                )
+                drawLine(
+                    "Potassium: \(Int(section.totals.potassiumMg)) mg\(markerIfHigh(section.totals.potassiumMg, threshold: targets.potassiumMg))",
+                    font: .systemFont(ofSize: 12),
+                    spacingAfter: 4
+                )
+                drawLine(
+                    "Phosphorus: \(Int(section.totals.phosphorusMg)) mg\(markerIfHigh(section.totals.phosphorusMg, threshold: targets.phosphorusMg))",
+                    font: .systemFont(ofSize: 12),
+                    spacingAfter: 12
+                )
+            }
+        }
+    }
+
+    private static func markerIfHigh(_ value: Double, threshold: Double?) -> String {
+        guard let threshold, value > threshold else { return "" }
+        return "  HIGH"
+    }
+
+    private static func fileStamp(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 }
 
@@ -2147,10 +2613,21 @@ private struct OpenAIModel: Identifiable, Hashable {
 private struct OpenRouterModel: Identifiable, Hashable {
     let id: String
     let displayName: String
+    let supportsVision: Bool
+    let isRouter: Bool
+
+    static let autoRouter = OpenRouterModel(
+        id: "openrouter/auto",
+        displayName: "OpenRouter Auto Router",
+        supportsVision: true,
+        isRouter: true
+    )
 
     static let freeRouter = OpenRouterModel(
         id: "openrouter/free",
-        displayName: "OpenRouter Free Router"
+        displayName: "OpenRouter Free Router",
+        supportsVision: true,
+        isRouter: true
     )
 }
 
@@ -2217,7 +2694,7 @@ private enum Config {
 
     static var openRouterModelID: String {
         let saved = defaults.string(forKey: "openRouterModelID") ?? ""
-        return saved.isEmpty ? "openrouter/free" : saved
+        return saved.isEmpty ? OpenRouterModel.autoRouter.id : saved
     }
 
     static var isConfigured: Bool {
@@ -2265,6 +2742,19 @@ private enum ClaudeService {
         }
     }
 
+    static func analyzeFood(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
+        switch Config.selectedProvider {
+        case .anthropic:
+            return try await analyzeFoodWithAnthropic(image: image, correctedDescription: correctedDescription)
+        case .gemini:
+            return try await analyzeFoodWithGemini(image: image, correctedDescription: correctedDescription)
+        case .openAI:
+            return try await analyzeFoodWithOpenAI(image: image, correctedDescription: correctedDescription)
+        case .openRouter:
+            return try await analyzeFoodWithOpenRouter(image: image, correctedDescription: correctedDescription)
+        }
+    }
+
     static func analyzeText(description: String) async throws -> NutritionResult {
         switch Config.selectedProvider {
         case .anthropic:
@@ -2278,7 +2768,7 @@ private enum ClaudeService {
         }
     }
 
-    static func fetchOpenRouterFreeModels(apiKey: String) async throws -> [OpenRouterModel] {
+    static func fetchOpenRouterModels(apiKey: String) async throws -> [OpenRouterModel] {
         var request = URLRequest(url: openRouterModelsURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 30
@@ -2319,22 +2809,25 @@ private enum ClaudeService {
 
         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
 
-        let freeModels = decoded.data.filter { model in
+        let modelsFromAPI = decoded.data.filter { model in
             let outputs = model.architecture?.output_modalities ?? ["text"]
             guard outputs.contains("text") else { return false }
-
-            let prompt = Decimal(string: model.pricing?.prompt ?? "1") ?? 1
-            let completion = Decimal(string: model.pricing?.completion ?? "1") ?? 1
-            let request = Decimal(string: model.pricing?.request ?? "0") ?? 0
-            return prompt == 0 && completion == 0 && request == 0
+            return true
         }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         .map { model in
-            OpenRouterModel(id: model.id, displayName: model.name)
+            let inputs = model.architecture?.input_modalities ?? []
+            let supportsVision = inputs.contains("image")
+            return OpenRouterModel(
+                id: model.id,
+                displayName: model.name,
+                supportsVision: supportsVision,
+                isRouter: false
+            )
         }
 
-        var models = [OpenRouterModel.freeRouter]
-        models.append(contentsOf: freeModels)
+        var models = [OpenRouterModel.autoRouter, OpenRouterModel.freeRouter]
+        models.append(contentsOf: modelsFromAPI)
         return Array(NSOrderedSet(array: models).compactMap { $0 as? OpenRouterModel })
     }
 
@@ -2365,9 +2858,12 @@ private enum ClaudeService {
 
         struct GeminiModelsResponse: Decodable {
             struct GeminiModelDTO: Decodable {
+                struct InputTokenLimit: Decodable {}
+
                 let name: String
                 let displayName: String?
                 let supportedGenerationMethods: [String]?
+                let inputTokenLimit: Int?
             }
 
             let models: [GeminiModelDTO]?
@@ -2377,7 +2873,14 @@ private enum ClaudeService {
 
         let models = (decoded.models ?? [])
             .filter { model in
-                (model.supportedGenerationMethods ?? []).contains("generateContent")
+                let methods = model.supportedGenerationMethods ?? []
+                let id = model.name.replacingOccurrences(of: "models/", with: "")
+                let isImageCapableName =
+                    id.contains("flash") ||
+                    id.contains("pro") ||
+                    id.contains("vision")
+
+                return methods.contains("generateContent") && isImageCapableName
             }
             .map { model in
                 let id = model.name.replacingOccurrences(of: "models/", with: "")
@@ -2436,8 +2939,7 @@ private enum ClaudeService {
 
         let preferredPrefixes = [
             "gpt-4.1",
-            "gpt-4o",
-            "gpt-5"
+            "gpt-4o"
         ]
 
         return decoded.data
@@ -2499,8 +3001,39 @@ private enum ClaudeService {
         return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
     }
 
-    private static func analyzeFoodWithGemini(image: UIImage) async throws -> NutritionResult {
+    private static func analyzeFoodWithAnthropic(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
         let resized = resize(image, maxDimension: 1280)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "model": anthropicModel,
+            "max_tokens": 512,
+            "messages": [[
+                "role": "user",
+                "content": [
+                    [
+                        "type": "image",
+                        "source": [
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": jpeg.base64EncodedString()
+                        ]
+                    ],
+                    [
+                        "type": "text",
+                        "text": correctedImageNutritionPrompt(for: correctedDescription)
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
+    }
+
+    private static func analyzeFoodWithGemini(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1024)
         guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
             throw ClaudeError.imageEncodingFailed
         }
@@ -2518,7 +3051,8 @@ private enum ClaudeService {
                         "text": imageNutritionPrompt
                     ]
                 ]
-            ]]
+            ]],
+            "generationConfig": geminiJSONGenerationConfig
         ]
 
         return try await requestGeminiResult(body: body, modelUsed: Config.geminiModelID)
@@ -2532,7 +3066,34 @@ private enum ClaudeService {
                         "text": textNutritionPrompt(for: description)
                     ]
                 ]
-            ]]
+            ]],
+            "generationConfig": geminiJSONGenerationConfig
+        ]
+
+        return try await requestGeminiResult(body: body, modelUsed: Config.geminiModelID)
+    }
+
+    private static func analyzeFoodWithGemini(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1024)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "contents": [[
+                "parts": [
+                    [
+                        "inline_data": [
+                            "mime_type": "image/jpeg",
+                            "data": jpeg.base64EncodedString()
+                        ]
+                    ],
+                    [
+                        "text": correctedImageNutritionPrompt(for: correctedDescription)
+                    ]
+                ]
+            ]],
+            "generationConfig": geminiJSONGenerationConfig
         ]
 
         return try await requestGeminiResult(body: body, modelUsed: Config.geminiModelID)
@@ -2585,38 +3146,55 @@ private enum ClaudeService {
         return try await requestOpenAIResult(body: body, modelUsed: Config.openAIModelID)
     }
 
-    private static func analyzeFoodWithOpenRouter(image: UIImage) async throws -> NutritionResult {
+    private static func analyzeFoodWithOpenAI(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
         let resized = resize(image, maxDimension: 1280)
         guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
             throw ClaudeError.imageEncodingFailed
         }
 
-        let prompt = """
-        Analyze this food image and return ONLY a valid JSON object:
-
-        {
-          "food_name": "specific food name",
-          "estimated_quantity": "e.g. 1 cup cooked rice, 200g chicken",
-          "calories": 450,
-          "protein_g": 28.0,
-          "carbs_g": 45.0,
-          "fat_g": 14.0,
-          "fiber_g": 3.0,
-          "confidence": "high",
-          "notes": "brief note on assumptions or portion estimate",
-          "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string"
-        }
-        """
-
         let body: [String: Any] = [
-            "model": Config.openRouterModelID,
-            "max_tokens": 512,
+            "model": Config.openAIModelID,
+            "response_format": [
+                "type": "json_object"
+            ],
             "messages": [[
                 "role": "user",
                 "content": [
                     [
                         "type": "text",
-                        "text": prompt
+                        "text": correctedImageNutritionPrompt(for: correctedDescription)
+                    ],
+                    [
+                        "type": "image_url",
+                        "image_url": [
+                            "url": "data:image/jpeg;base64,\(jpeg.base64EncodedString())",
+                            "detail": "low"
+                        ]
+                    ]
+                ]
+            ]]
+        ]
+
+        return try await requestOpenAIResult(body: body, modelUsed: Config.openAIModelID)
+    }
+
+    private static func analyzeFoodWithOpenRouter(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1024)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "model": Config.openRouterModelID,
+            "max_tokens": 512,
+            "response_format": openRouterJSONResponseFormat,
+            "plugins": openRouterResponseHealingPlugin,
+            "messages": [[
+                "role": "user",
+                "content": [
+                    [
+                        "type": "text",
+                        "text": imageNutritionPrompt
                     ],
                     [
                         "type": "image_url",
@@ -2632,31 +3210,45 @@ private enum ClaudeService {
     }
 
     private static func analyzeTextWithOpenRouter(description: String) async throws -> NutritionResult {
-        let prompt = """
-        The user described their food as: "\(description)"
+        let body: [String: Any] = [
+            "model": Config.openRouterModelID,
+            "max_tokens": 512,
+            "response_format": openRouterJSONResponseFormat,
+            "plugins": openRouterResponseHealingPlugin,
+            "messages": [[
+                "role": "user",
+                "content": textNutritionPrompt(for: description)
+            ]]
+        ]
 
-        Return ONLY a valid JSON object:
+        return try await requestOpenRouterResult(body: body)
+    }
 
-        {
-          "food_name": "specific food name",
-          "estimated_quantity": "typical serving",
-          "calories": 450,
-          "protein_g": 28.0,
-          "carbs_g": 45.0,
-          "fat_g": 14.0,
-          "fiber_g": 3.0,
-          "confidence": "medium",
-          "notes": "brief note on assumptions or portion estimate",
-          "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string"
+    private static func analyzeFoodWithOpenRouter(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 1024)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+            throw ClaudeError.imageEncodingFailed
         }
-        """
 
         let body: [String: Any] = [
             "model": Config.openRouterModelID,
             "max_tokens": 512,
+            "response_format": openRouterJSONResponseFormat,
+            "plugins": openRouterResponseHealingPlugin,
             "messages": [[
                 "role": "user",
-                "content": prompt
+                "content": [
+                    [
+                        "type": "text",
+                        "text": correctedImageNutritionPrompt(for: correctedDescription)
+                    ],
+                    [
+                        "type": "image_url",
+                        "image_url": [
+                            "url": "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
+                        ]
+                    ]
+                ]
             ]]
         ]
 
@@ -2734,6 +3326,10 @@ private enum ClaudeService {
         }
 
         struct GeminiResponse: Decodable {
+            struct PromptFeedback: Decodable {
+                let blockReason: String?
+            }
+
             struct Candidate: Decodable {
                 struct Content: Decodable {
                     struct Part: Decodable {
@@ -2747,9 +3343,15 @@ private enum ClaudeService {
             }
 
             let candidates: [Candidate]?
+            let promptFeedback: PromptFeedback?
         }
 
-        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+        let decoded: GeminiResponse
+        do {
+            decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+        } catch {
+            throw ClaudeError.apiError(200, "Gemini returned an unexpected response: \(summarizedResponseBody(data))")
+        }
         let text = decoded.candidates?
             .first?
             .content?
@@ -2758,10 +3360,17 @@ private enum ClaudeService {
             .joined(separator: "\n") ?? ""
 
         guard !text.isEmpty else {
-            throw ClaudeError.noContent
+            if let blockReason = decoded.promptFeedback?.blockReason, !blockReason.isEmpty {
+                throw ClaudeError.apiError(400, "Gemini blocked the request: \(blockReason)")
+            }
+            throw ClaudeError.apiError(200, "Gemini returned no usable text. Raw response: \(summarizedResponseBody(data))")
         }
 
-        return try parse(text, providerName: AIProvider.gemini.displayName, modelUsed: modelUsed)
+        do {
+            return try parse(text, providerName: AIProvider.gemini.displayName, modelUsed: modelUsed)
+        } catch {
+            throw ClaudeError.apiError(200, "Gemini returned unparseable text: \(summarizedText(text))")
+        }
     }
 
     private static func requestOpenAIResult(body: [String: Any], modelUsed: String) async throws -> NutritionResult {
@@ -2769,24 +3378,49 @@ private enum ClaudeService {
             throw ClaudeError.missingAPIKey
         }
 
-        var request = URLRequest(url: openAIURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 60
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(Config.openAIAPIKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await performOpenAIRequest(body: body)
 
         guard let http = response as? HTTPURLResponse else {
             throw ClaudeError.networkError
         }
 
         guard http.statusCode == 200 else {
+            if [400, 404, 422].contains(http.statusCode),
+               modelUsed != OpenAIModel.defaultModel.id {
+                var fallbackBody = body
+                fallbackBody["model"] = OpenAIModel.defaultModel.id
+                let (fallbackData, fallbackResponse) = try await performOpenAIRequest(body: fallbackBody)
+
+                guard let fallbackHTTP = fallbackResponse as? HTTPURLResponse else {
+                    throw ClaudeError.networkError
+                }
+
+                guard fallbackHTTP.statusCode == 200 else {
+                    let fallbackBodyText = String(data: fallbackData, encoding: .utf8) ?? ""
+                    throw ClaudeError.apiError(fallbackHTTP.statusCode, fallbackBodyText)
+                }
+
+                return try decodeOpenAIResult(from: fallbackData, modelUsed: OpenAIModel.defaultModel.id)
+            }
+
             let body = String(data: data, encoding: .utf8) ?? ""
             throw ClaudeError.apiError(http.statusCode, body)
         }
 
+        return try decodeOpenAIResult(from: data, modelUsed: modelUsed)
+    }
+
+    private static func performOpenAIRequest(body: [String: Any]) async throws -> (Data, URLResponse) {
+        var request = URLRequest(url: openAIURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(Config.openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return try await URLSession.shared.data(for: request)
+    }
+
+    private static func decodeOpenAIResult(from data: Data, modelUsed: String) throws -> NutritionResult {
         struct OpenAIResponse: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable {
@@ -2799,12 +3433,21 @@ private enum ClaudeService {
             let choices: [Choice]
         }
 
-        let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+        let decoded: OpenAIResponse
+        do {
+            decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+        } catch {
+            throw ClaudeError.apiError(200, "OpenAI returned an unexpected response: \(summarizedResponseBody(data))")
+        }
         guard let text = decoded.choices.first?.message.content, !text.isEmpty else {
-            throw ClaudeError.noContent
+            throw ClaudeError.apiError(200, "OpenAI returned no usable text. Raw response: \(summarizedResponseBody(data))")
         }
 
-        return try parse(text, providerName: AIProvider.openAI.displayName, modelUsed: modelUsed)
+        do {
+            return try parse(text, providerName: AIProvider.openAI.displayName, modelUsed: modelUsed)
+        } catch {
+            throw ClaudeError.apiError(200, "OpenAI returned unparseable text: \(summarizedText(text))")
+        }
     }
 
     private static func requestOpenRouterResult(body: [String: Any]) async throws -> NutritionResult {
@@ -2812,7 +3455,8 @@ private enum ClaudeService {
             throw ClaudeError.missingAPIKey
         }
 
-        let (data, response) = try await performOpenRouterRequest(body: body)
+        let normalizedBody = normalizedOpenRouterBody(from: body)
+        let (data, response) = try await performOpenRouterRequest(body: normalizedBody)
 
         guard let http = response as? HTTPURLResponse else {
             throw ClaudeError.networkError
@@ -2820,10 +3464,10 @@ private enum ClaudeService {
 
         guard http.statusCode == 200 else {
             if http.statusCode == 404,
-               let selectedModel = body["model"] as? String,
-               selectedModel != OpenRouterModel.freeRouter.id {
-                var fallbackBody = body
-                fallbackBody["model"] = OpenRouterModel.freeRouter.id
+               let selectedModel = normalizedBody["model"] as? String,
+               selectedModel != OpenRouterModel.autoRouter.id {
+                var fallbackBody = normalizedBody
+                fallbackBody["model"] = OpenRouterModel.autoRouter.id
                 let (fallbackData, fallbackResponse) = try await performOpenRouterRequest(body: fallbackBody)
 
                 guard let fallbackHTTP = fallbackResponse as? HTTPURLResponse else {
@@ -2831,6 +3475,27 @@ private enum ClaudeService {
                 }
 
                 guard fallbackHTTP.statusCode == 200 else {
+                    if fallbackHTTP.statusCode == 404 {
+                        var freeRouterBody = normalizedBody
+                        freeRouterBody["model"] = OpenRouterModel.freeRouter.id
+                        let (freeData, freeResponse) = try await performOpenRouterRequest(body: freeRouterBody)
+
+                        guard let freeHTTP = freeResponse as? HTTPURLResponse else {
+                            throw ClaudeError.networkError
+                        }
+
+                        guard freeHTTP.statusCode == 200 else {
+                            let freeBodyText = String(data: freeData, encoding: .utf8) ?? ""
+                            throw ClaudeError.apiError(freeHTTP.statusCode, freeBodyText)
+                        }
+
+                        return try decodeOpenRouterResult(
+                            from: freeData,
+                            providerName: AIProvider.openRouter.displayName,
+                            modelUsed: OpenRouterModel.freeRouter.id
+                        )
+                    }
+
                     let fallbackBodyText = String(data: fallbackData, encoding: .utf8) ?? ""
                     throw ClaudeError.apiError(fallbackHTTP.statusCode, fallbackBodyText)
                 }
@@ -2838,7 +3503,7 @@ private enum ClaudeService {
                 return try decodeOpenRouterResult(
                     from: fallbackData,
                     providerName: AIProvider.openRouter.displayName,
-                    modelUsed: OpenRouterModel.freeRouter.id
+                    modelUsed: OpenRouterModel.autoRouter.id
                 )
             }
 
@@ -2846,12 +3511,42 @@ private enum ClaudeService {
             throw ClaudeError.apiError(http.statusCode, body)
         }
 
-        let selectedModel = (body["model"] as? String) ?? Config.openRouterModelID
+        let selectedModel = (normalizedBody["model"] as? String) ?? Config.openRouterModelID
         return try decodeOpenRouterResult(
             from: data,
             providerName: AIProvider.openRouter.displayName,
             modelUsed: selectedModel
         )
+    }
+
+    private static func normalizedOpenRouterBody(from body: [String: Any]) -> [String: Any] {
+        var normalizedBody = body
+        let selectedModel = (body["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        normalizedBody["model"] = selectedModel.isEmpty ? OpenRouterModel.autoRouter.id : selectedModel
+        normalizedBody["provider"] = [
+            "sort": "latency",
+            "allow_fallbacks": true,
+            "require_parameters": false
+        ]
+        return normalizedBody
+    }
+
+    private static var geminiJSONGenerationConfig: [String: Any] {
+        [
+            "response_mime_type": "application/json"
+        ]
+    }
+
+    private static var openRouterJSONResponseFormat: [String: Any] {
+        [
+            "type": "json_object"
+        ]
+    }
+
+    private static var openRouterResponseHealingPlugin: [[String: Any]] {
+        [
+            ["id": "response-healing"]
+        ]
     }
 
     private static func performOpenRouterRequest(body: [String: Any]) async throws -> (Data, URLResponse) {
@@ -2907,6 +3602,20 @@ private enum ClaudeService {
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
         }
+    }
+
+    private static func summarizedResponseBody(_ data: Data) -> String {
+        let raw = String(data: data, encoding: .utf8) ?? "<non-UTF8 response>"
+        return summarizedText(raw)
+    }
+
+    private static func summarizedText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "<empty>" }
+        if trimmed.count <= 600 {
+            return trimmed
+        }
+        return String(trimmed.prefix(600)) + "..."
     }
 
     private static func parse(_ text: String, providerName: String, modelUsed: String) throws -> NutritionResult {
@@ -3001,6 +3710,38 @@ private enum ClaudeService {
     private static func textNutritionPrompt(for description: String) -> String {
         """
         The user described their food as: "\(description)"
+
+        Return ONLY a valid JSON object:
+
+        {
+          "food_name": "specific food name",
+          "estimated_quantity": "typical serving",
+          "calories": 450,
+          "protein_g": 28.0,
+          "carbs_g": 45.0,
+          "fat_g": 14.0,
+          "fiber_g": 3.0,
+          "sodium_mg": 950,
+          "potassium_mg": 540,
+          "phosphorus_mg": 320,
+          "confidence": "medium",
+          "notes": "brief note on assumptions or portion estimate",
+          "kidney_warning": "brief warning for someone with kidney disease, otherwise empty string",
+          "heart_warning": "brief warning for someone focused on heart health, otherwise empty string",
+          "sodium_warning": "brief warning if salt/sodium appears too high, otherwise empty string",
+          "potassium_warning": "brief warning if potassium appears too high, otherwise empty string",
+          "phosphorus_warning": "brief warning if phosphorus appears too high, otherwise empty string"
+        }
+
+        \(healthWarningRules)
+        """
+    }
+
+    private static func correctedImageNutritionPrompt(for correctedDescription: String) -> String {
+        """
+        The user corrected the photo analysis and says this image shows: "\(correctedDescription)".
+
+        Use that correction as the primary description of the meal. Use the image to refine portion size and nutrition estimates, but do not rename the food to something inconsistent with the user's correction unless the image clearly proves the correction is impossible.
 
         Return ONLY a valid JSON object:
 

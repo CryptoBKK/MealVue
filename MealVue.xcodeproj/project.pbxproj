@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		DC0A78E62FA0D76B00245A38 /* Kidney Foods.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kidney Foods.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DC0A78E62FA0D76B00245A38 /* MealVue.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MealVue.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		DC0A78E82FA0D76B00245A38 /* Kidney Foods */ = {
+		DC0A78E82FA0D76B00245A38 /* MealVue */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Kidney Foods";
+			path = "MealVue";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		DC0A78DD2FA0D76B00245A38 = {
 			isa = PBXGroup;
 			children = (
-				DC0A78E82FA0D76B00245A38 /* Kidney Foods */,
+				DC0A78E82FA0D76B00245A38 /* MealVue */,
 				DC0A78E72FA0D76B00245A38 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		DC0A78E72FA0D76B00245A38 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				DC0A78E62FA0D76B00245A38 /* Kidney Foods.app */,
+				DC0A78E62FA0D76B00245A38 /* MealVue.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		DC0A78E52FA0D76B00245A38 /* Kidney Foods */ = {
+		DC0A78E52FA0D76B00245A38 /* MealVue */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = DC0A78F32FA0D77600245A38 /* Build configuration list for PBXNativeTarget "Kidney Foods" */;
+			buildConfigurationList = DC0A78F32FA0D77600245A38 /* Build configuration list for PBXNativeTarget "MealVue" */;
 			buildPhases = (
 				DC0A78E22FA0D76B00245A38 /* Sources */,
 				DC0A78E32FA0D76B00245A38 /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				DC0A78E82FA0D76B00245A38 /* Kidney Foods */,
+				DC0A78E82FA0D76B00245A38 /* MealVue */,
 			);
-			name = "Kidney Foods";
+			name = "MealVue";
 			packageProductDependencies = (
 			);
-			productName = "Kidney Foods";
-			productReference = DC0A78E62FA0D76B00245A38 /* Kidney Foods.app */;
+			productName = "MealVue";
+			productReference = DC0A78E62FA0D76B00245A38 /* MealVue.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = DC0A78E12FA0D76B00245A38 /* Build configuration list for PBXProject "Kidney Foods" */;
+			buildConfigurationList = DC0A78E12FA0D76B00245A38 /* Build configuration list for PBXProject "MealVue" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				DC0A78E52FA0D76B00245A38 /* Kidney Foods */,
+				DC0A78E52FA0D76B00245A38 /* MealVue */,
 			);
 		};
 /* End PBXProject section */
@@ -319,7 +319,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		DC0A78E12FA0D76B00245A38 /* Build configuration list for PBXProject "Kidney Foods" */ = {
+		DC0A78E12FA0D76B00245A38 /* Build configuration list for PBXProject "MealVue" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DC0A78F12FA0D77600245A38 /* Debug */,
@@ -328,7 +328,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		DC0A78F32FA0D77600245A38 /* Build configuration list for PBXNativeTarget "Kidney Foods" */ = {
+		DC0A78F32FA0D77600245A38 /* Build configuration list for PBXNativeTarget "MealVue" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DC0A78F42FA0D77600245A38 /* Debug */,
