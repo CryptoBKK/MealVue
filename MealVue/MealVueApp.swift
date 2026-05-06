@@ -51,21 +51,15 @@ struct MealVueApp: App {
     }
 
     private func makeModelContainer() -> ModelContainer {
-        let schema = Schema([
-            FoodEntry.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            print("🔍 Creating ModelContainer for FoodEntry...")
+            let container = try ModelContainer(for: FoodEntry.self)
+            print("✅ ModelContainer created successfully")
+            return container
         } catch {
-            let fallbackConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-
-            do {
-                return try ModelContainer(for: schema, configurations: [fallbackConfiguration])
-            } catch {
-                fatalError("Could not create fallback ModelContainer: \(error)")
-            }
+            print("❌ Failed to create ModelContainer: \(error)")
+            print("   Error type: \(type(of: error))")
+            fatalError("Cannot create ModelContainer: \(error)")
         }
     }
 }

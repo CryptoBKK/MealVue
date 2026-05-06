@@ -10,8 +10,8 @@ import SwiftData
 import UIKit
 
 @Model
-final class FoodEntry {
-    var id: UUID
+class FoodEntry {
+    var entryId: UUID
     var timestamp: Date
     var foodName: String
     var estimatedQuantity: String
@@ -46,7 +46,7 @@ final class FoodEntry {
         aiNotes: String = "",
         imageData: Data? = nil
     ) {
-        self.id = UUID()
+        self.entryId = UUID()
         self.timestamp = Date()
         self.foodName = foodName
         self.estimatedQuantity = estimatedQuantity

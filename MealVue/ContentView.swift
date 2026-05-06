@@ -136,7 +136,33 @@ private struct LogFoodView: View {
                     }
                     .padding(.top, 30)
 
+                    #if targetEnvironment(simulator)
+                    // Simulator tip: drag images from Finder to simulator window to add to Photos
+                    Text("Simulator tip: Drag an image from Finder onto the simulator window to add to Photos, then use 'Choose from Library' above.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    #endif
+
                     VStack(spacing: 14) {
+                        #if targetEnvironment(simulator)
+                        // Simulator: offer bundled Thai food images as mock camera
+                        Menu {
+                            Button("Pad Thai") { loadBundledImage(named: "pad_thai") }
+                            Button("Som Tam") { loadBundledImage(named: "som_tam") }
+                            Button("Tom Yum") { loadBundledImage(named: "tom_yum") }
+                            Button("Gaeng Daeng") { loadBundledImage(named: "gaeng_daeng") }
+                            Button("Khao Pad") { loadBundledImage(named: "khao_pad") }
+                        } label: {
+                            ActionButtonLabel(
+                                title: "Mock Camera (Sim)",
+                                systemImage: "camera.fill",
+                                fill: Color.green,
+                                foreground: .white
+                            )
+                        }
+                        #else
                         Button {
                             showCamera = true
                         } label: {
@@ -147,6 +173,7 @@ private struct LogFoodView: View {
                                 foreground: .white
                             )
                         }
+                        #endif
 
                         PhotosPicker(selection: $pickerItem, matching: .images) {
                             ActionButtonLabel(
@@ -215,6 +242,16 @@ private struct LogFoodView: View {
             }
         }
     }
+
+    #if targetEnvironment(simulator)
+    private func loadBundledImage(named name: String) {
+        guard let image = UIImage(named: name) else {
+            print("⚠️ Bundled image not found: \(name)")
+            return
+        }
+        pendingImage = IdentifiableImage(image: image)
+    }
+    #endif
 }
 
 private struct HistoryView: View {
@@ -847,6 +884,34 @@ private struct SettingsView: View {
     @State private var geminiError = ""
     @State private var openAIError = ""
     @State private var openRouterError = ""
+    @State private var documentsPath = ""
+
+    #if targetEnvironment(simulator)
+    private func copyBundledImagesToDocuments() {
+        let fileManager = FileManager.default
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            documentsPath = "Could not find Documents directory"
+            return
+        }
+        let images = ["pad_thai", "som_tam", "tom_yum", "gaeng_daeng", "khao_pad"]
+        var copied: [String] = []
+        for name in images {
+            guard let image = UIImage(named: name) else { continue }
+            guard let data = image.pngData() else { continue }
+            let fileURL = documentsURL.appendingPathComponent("\(name).png")
+            do {
+                try data.write(to: fileURL)
+                copied.append(name)
+            } catch {
+                print("Failed to write \(name): \(error)")
+            }
+        }
+        documentsPath = documentsURL.path
+        print("✅ Copied \(copied.count) images to: \(documentsURL.path)")
+        // Also copy to pasteboard for convenience
+        UIPasteboard.general.string = documentsURL.path
+    }
+    #endif
 
     private var selectedProvider: AIProvider {
         AIProvider(rawValue: aiProviderRaw) ?? .anthropic
@@ -1090,6 +1155,45 @@ private struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                #if targetEnvironment(simulator)
+                Section("Simulator Setup") {
+                    Button("Copy Thai Food Images to Documents") {
+                        copyBundledImagesToDocuments()
+                    }
+                    if !documentsPath.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Images copied to:")
+                                .font(.footnote)
+                            HStack {
+                                Text(documentsPath)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                Button("Copy") {
+                                    UIPasteboard.general.string = documentsPath
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                                Button("Share") {
+                                    let activityVC = UIActivityViewController(activityItems: [documentsPath], applicationActivities: nil)
+                                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                       let rootVC = windowScene.keyWindow?.rootViewController {
+                                        rootVC.present(activityVC, animated: true)
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                            }
+                        }
+                    }
+                    Text("Tip: Tap 'Share' to AirDrop the path to your Mac, or copy from Xcode's console.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                #endif
 
                 Section("About This App") {
                     Label("MealVue food logging with photo capture", systemImage: "camera.fill")
