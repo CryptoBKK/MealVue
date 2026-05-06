@@ -1,5 +1,5 @@
 //  ContentView.swift
-//  Kidney Foods
+//  MealVue
 //
 //  Created by Quinn Rieman on 28/4/26.
 //
@@ -3555,7 +3555,7 @@ private enum ClaudeService {
         request.timeoutInterval = 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(Config.openRouterAPIKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("Kidney Foods", forHTTPHeaderField: "X-Title")
+        request.setValue("MealVue", forHTTPHeaderField: "X-Title")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return try await URLSession.shared.data(for: request)
     }

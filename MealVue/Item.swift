@@ -1,6 +1,6 @@
 //
 //  Item.swift
-//  Kidney Foods
+//  MealVue
 //
 //  Created by Quinn Rieman on 28/4/26.
 //

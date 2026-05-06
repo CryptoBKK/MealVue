@@ -1,6 +1,6 @@
 //
-//  Kidney_FoodsApp.swift
-//  Kidney Foods
+//  MealVueApp.swift
+//  MealVue
 //
 //  Created by Quinn Rieman on 28/4/26.
 //
@@ -9,7 +9,7 @@ import SwiftUI
 import SwiftData
 
 @main
-struct Kidney_FoodsApp: App {
+struct MealVueApp: App {
     @State private var isReady = false
     @State private var minimumElapsed = false
     @State private var modelContainer: ModelContainer?
