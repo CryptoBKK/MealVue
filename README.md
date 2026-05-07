@@ -21,10 +21,16 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
 - Daily totals for:
   - Calories
   - Protein
+  - Fiber
   - Sodium
   - Potassium
   - Phosphorus
-- Red highlighting when tracked daily targets are exceeded
+- Circular nutrient dashboard with 7-day trend charts
+- Apple Health integration for:
+  - nutrition export from newly logged meals
+  - nutrition trend reads
+  - kidney lab record reads when Health Records are available
+- Apple Health delete-sync for newly exported meals
 - Food and medication reference guidance
 
 ## Setup
@@ -48,6 +54,13 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
    - sodium
    - potassium
    - phosphorus
+9. For Apple Health testing in the simulator:
+   - enable `HealthKit` in `Signing & Capabilities`
+   - run an iPhone simulator
+   - open the `Health` tab in MealVue and authorize access
+10. For Apple Health testing on a real device:
+   - use a paid Apple Developer account with HealthKit capability enabled for the App ID
+   - Personal Team signing is not sufficient for HealthKit / Clinical Health Records device builds
 
 ## Notes
 
@@ -57,4 +70,6 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
 - Health warnings are controlled by the toggles in `Settings`.
 - The app displays which provider and model produced each AI analysis result.
 - Sodium, potassium, phosphorus, and protein targets can be manually overridden in `Settings`.
+- Fiber is tracked in meal totals, Apple Health summaries, and 7-day trends, but it does not currently use a warning threshold target.
+- Apple Health delete-sync applies to meals exported by current builds that include MealVue Health metadata.
 - CKD defaults are stage-aware, but they are still reference targets and should not replace clinician guidance or lab-based diet planning.

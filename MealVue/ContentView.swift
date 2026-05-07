@@ -63,6 +63,7 @@ struct ContentView: View {
 private struct DailyLogView: View {
     @Query(sort: \FoodEntry.timestamp, order: .reverse) private var entries: [FoodEntry]
     @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
 
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
@@ -162,9 +163,23 @@ private struct DailyLogView: View {
         return formatter.string(from: Date())
     }
 
+    private func parsedTarget(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Double(trimmed)
+    }
+
     private func delete(at offsets: IndexSet) {
+        let entryIDs = offsets.map { todayEntries[$0].entryId }
+
         for index in offsets {
             modelContext.delete(todayEntries[index])
+        }
+
+        Task {
+            for entryID in entryIDs {
+                try? await healthKitManager.deleteExportedMeal(entryID: entryID)
+            }
         }
     }
 }

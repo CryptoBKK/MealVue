@@ -9,14 +9,14 @@ import SwiftData
 struct SparklineView: View {
     let title: String
     let data: [Double]
-    let target: Double
+    let target: Double?
     let unit: String
     let color: Color
     let days: Int
     
     private var maxValue: Double {
         let maxData = data.max() ?? 0
-        return max(maxData, target) * 1.2
+        return max(maxData, target ?? 0, 1) * 1.2
     }
     
     private var averageValue: Double {
@@ -47,7 +47,7 @@ struct SparklineView: View {
                     
                     VStack(spacing: 2) {
                         // Target line indicator
-                        if value > target {
+                        if let target, value > target {
                             Circle()
                                 .fill(Color.red)
                                 .frame(width: 4, height: 4)
@@ -65,27 +65,28 @@ struct SparklineView: View {
             
             // Target line
             HStack {
-                Text("Target: \(Int(target)) \(unit)")
+                Text(targetLabel)
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 
                 Spacer()
                 
-                // Simple legend
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 6, height: 6)
-                    Text("OK")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 6, height: 6)
-                    Text(">")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                if target != nil {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 6, height: 6)
+                        Text("OK")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 6, height: 6)
+                        Text(">")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         }
@@ -96,13 +97,22 @@ struct SparklineView: View {
     }
     
     private func barColor(for value: Double) -> Color {
+        guard let target, target > 0 else {
+            return color.opacity(0.8)
+        }
+
         if value > target {
             return .red
         } else if value > target * 0.8 {
             return .yellow
         } else {
-            return color
+            return .green
         }
+    }
+
+    private var targetLabel: String {
+        guard let target else { return "Tracking only" }
+        return "Target: \(Int(target)) \(unit)"
     }
 }
 
@@ -113,11 +123,11 @@ struct NutrientSparklinesView: View {
     let potassiumTarget: Double
     let phosphorusTarget: Double
     
-    private var last7DaysData: [(date: Date, protein: Double, sodium: Double, potassium: Double, phosphorus: Double)] {
+    private var last7DaysData: [(date: Date, protein: Double, fiber: Double, sodium: Double, potassium: Double, phosphorus: Double)] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         
-        return (0..<7).compactMap { offset in
+        return (0..<7).reversed().compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
             let dayStart = date
             guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return nil }
@@ -129,6 +139,7 @@ struct NutrientSparklinesView: View {
             return (
                 date: date,
                 protein: dayEntries.reduce(0) { $0 + $1.proteinG },
+                fiber: dayEntries.reduce(0) { $0 + $1.fiberG },
                 sodium: dayEntries.reduce(0) { $0 + $1.sodiumMg },
                 potassium: dayEntries.reduce(0) { $0 + $1.potassiumMg },
                 phosphorus: dayEntries.reduce(0) { $0 + $1.phosphorusMg }
@@ -176,6 +187,15 @@ struct NutrientSparklinesView: View {
                     target: phosphorusTarget,
                     unit: "mg",
                     color: .purple,
+                    days: 7
+                )
+
+                SparklineView(
+                    title: "Fiber",
+                    data: last7DaysData.map { $0.fiber },
+                    target: nil,
+                    unit: "g",
+                    color: .green,
                     days: 7
                 )
             }

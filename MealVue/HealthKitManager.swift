@@ -19,6 +19,7 @@ final class HealthKitManager {
 
     private let healthStore = HKHealthStore()
     private let nutritionIdentifiers: [HKQuantityTypeIdentifier] = [
+        .dietaryFiber,
         .dietaryProtein,
         .dietarySodium,
         .dietaryPotassium,
@@ -117,6 +118,19 @@ final class HealthKitManager {
         try await save(samples: [foodCorrelation])
     }
 
+    func deleteExportedMeal(entryID: UUID) async throws {
+        guard isAvailable else { return }
+
+        guard let correlation = try await exportedFoodCorrelation(for: entryID) else { return }
+        let objects = Array(correlation.objects)
+
+        if !objects.isEmpty {
+            try await healthStore.delete(objects)
+        }
+
+        try await healthStore.delete(correlation)
+    }
+
     private var nutritionSampleTypes: Set<HKSampleType> {
         Set(exportedNutritionIdentifiers.compactMap(HKObjectType.quantityType))
     }
@@ -169,6 +183,13 @@ final class HealthKitManager {
                         endDate: endDate,
                         healthStore: healthStore
                     )
+                    async let fiber = Self.fetchCumulativeValue(
+                        for: .dietaryFiber,
+                        unit: .gram(),
+                        startDate: date,
+                        endDate: endDate,
+                        healthStore: healthStore
+                    )
                     async let sodium = Self.fetchCumulativeValue(
                         for: .dietarySodium,
                         unit: .gramUnit(with: .milli),
@@ -197,6 +218,7 @@ final class HealthKitManager {
                         date: date,
                         summary: HealthNutritionSummary(
                             proteinG: try await protein,
+                            fiberG: try await fiber,
                             sodiumMg: try await sodium,
                             potassiumMg: try await potassium,
                             phosphorusMg: try await phosphorus
@@ -279,7 +301,8 @@ final class HealthKitManager {
                 start: entry.timestamp,
                 end: entry.timestamp,
                 metadata: [
-                    HKMetadataKeyFoodType: entry.foodName
+                    HKMetadataKeyFoodType: entry.foodName,
+                    HKMetadataKeyExternalUUID: entry.entryId.uuidString
                 ]
             )
         }
@@ -292,6 +315,7 @@ final class HealthKitManager {
         let foodType = HKCorrelationType(.food)
         let metadata: [String: Any] = [
             HKMetadataKeyFoodType: entry.foodName,
+            HKMetadataKeyExternalUUID: entry.entryId.uuidString,
             "MealVueEstimatedQuantity": entry.estimatedQuantity,
             "MealVueConfidence": entry.confidence
         ]
@@ -317,6 +341,34 @@ final class HealthKitManager {
                 }
             }
         }
+    }
+
+    private func exportedFoodCorrelation(for entryID: UUID) async throws -> HKCorrelation? {
+        let predicate = HKQuery.predicateForObjects(
+            withMetadataKey: HKMetadataKeyExternalUUID,
+            operatorType: .equalTo,
+            value: entryID.uuidString
+        )
+
+        let results = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKCorrelation], Error>) in
+            let query = HKSampleQuery(
+                sampleType: HKCorrelationType(.food),
+                predicate: predicate,
+                limit: 1,
+                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                continuation.resume(returning: samples as? [HKCorrelation] ?? [])
+            }
+
+            healthStore.execute(query)
+        }
+
+        return results.first
     }
 
     private static func parseKidneyLab(from record: HKClinicalRecord) -> KidneyLabResult? {
@@ -459,12 +511,14 @@ struct HealthNutritionDay: Identifiable {
 
 struct HealthNutritionSummary {
     let proteinG: Double
+    let fiberG: Double
     let sodiumMg: Double
     let potassiumMg: Double
     let phosphorusMg: Double
 
     static let zero = HealthNutritionSummary(
         proteinG: 0,
+        fiberG: 0,
         sodiumMg: 0,
         potassiumMg: 0,
         phosphorusMg: 0
@@ -489,6 +543,7 @@ struct HealthTrendsView: View {
 
         return HealthNutritionSummary(
             proteinG: recentEntries.reduce(0) { $0 + $1.proteinG },
+            fiberG: recentEntries.reduce(0) { $0 + $1.fiberG },
             sodiumMg: recentEntries.reduce(0) { $0 + $1.sodiumMg },
             potassiumMg: recentEntries.reduce(0) { $0 + $1.potassiumMg },
             phosphorusMg: recentEntries.reduce(0) { $0 + $1.phosphorusMg }
@@ -533,6 +588,7 @@ struct HealthTrendsView: View {
 
                 Section("Today In Apple Health") {
                     HealthSummaryRow(title: "Protein", value: valueText(healthKitManager.snapshot.todayNutrition.proteinG, suffix: "g"))
+                    HealthSummaryRow(title: "Fiber", value: valueText(healthKitManager.snapshot.todayNutrition.fiberG, suffix: "g"))
                     HealthSummaryRow(title: "Sodium", value: valueText(healthKitManager.snapshot.todayNutrition.sodiumMg, suffix: "mg"))
                     HealthSummaryRow(title: "Potassium", value: valueText(healthKitManager.snapshot.todayNutrition.potassiumMg, suffix: "mg"))
                     HealthSummaryRow(title: "Phosphorus", value: valueText(healthKitManager.snapshot.todayNutrition.phosphorusMg, suffix: "mg"))
@@ -540,6 +596,7 @@ struct HealthTrendsView: View {
 
                 Section("MealVue Last 7 Days") {
                     HealthSummaryRow(title: "Protein", value: valueText(recentMealVueSummary.proteinG, suffix: "g"))
+                    HealthSummaryRow(title: "Fiber", value: valueText(recentMealVueSummary.fiberG, suffix: "g"))
                     HealthSummaryRow(title: "Sodium", value: valueText(recentMealVueSummary.sodiumMg, suffix: "mg"))
                     HealthSummaryRow(title: "Potassium", value: valueText(recentMealVueSummary.potassiumMg, suffix: "mg"))
                     HealthSummaryRow(title: "Phosphorus", value: valueText(recentMealVueSummary.phosphorusMg, suffix: "mg"))
@@ -555,8 +612,9 @@ struct HealthTrendsView: View {
                                 Text(day.date.formatted(date: .abbreviated, time: .omitted))
                                     .font(.headline)
 
-                                HStack(spacing: 10) {
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                                     HealthMetricChip(title: "Protein", value: valueText(day.summary.proteinG, suffix: "g"), tint: .blue)
+                                    HealthMetricChip(title: "Fiber", value: valueText(day.summary.fiberG, suffix: "g"), tint: .green)
                                     HealthMetricChip(title: "Sodium", value: valueText(day.summary.sodiumMg, suffix: "mg"), tint: .orange)
                                     HealthMetricChip(title: "Potassium", value: valueText(day.summary.potassiumMg, suffix: "mg"), tint: .yellow)
                                     HealthMetricChip(title: "Phosphorus", value: valueText(day.summary.phosphorusMg, suffix: "mg"), tint: .purple)
