@@ -11,8 +11,9 @@ import SwiftData
 @main
 struct MealVueApp: App {
     @State private var isReady = false
-    @State private var minimumElapsed = false
     @State private var modelContainer: ModelContainer?
+    @State private var startupError: String?
+    @State private var healthKitManager = HealthKitManager()
 
     var body: some Scene {
         WindowGroup {
@@ -22,18 +23,14 @@ struct MealVueApp: App {
                         maybeReady()
                     }
                     .modelContainer(modelContainer)
+                    .environment(healthKitManager)
                 }
 
                 if !isReady {
-                    LaunchView()
+                    LaunchView(startupError: startupError)
                         .transition(.opacity)
                         .zIndex(1)
                 }
-            }
-            .task {
-                try? await Task.sleep(for: .milliseconds(900))
-                minimumElapsed = true
-                maybeReady()
             }
             .task {
                 guard modelContainer == nil else { return }
@@ -44,27 +41,100 @@ struct MealVueApp: App {
     }
 
     private func maybeReady() {
-        guard minimumElapsed, modelContainer != nil, !isReady else { return }
+        guard modelContainer != nil, !isReady else { return }
         withAnimation(.easeOut(duration: 0.35)) {
             isReady = true
         }
     }
 
-    private func makeModelContainer() -> ModelContainer {
+    private func makeModelContainer() -> ModelContainer? {
+        let schema = Schema([FoodEntry.self])
+        let configuration = ModelConfiguration(
+            "MealVue",
+            schema: schema,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+
         do {
             print("🔍 Creating ModelContainer for FoodEntry...")
-            let container = try ModelContainer(for: FoodEntry.self)
+            let container = try ModelContainer(
+                for: schema,
+                configurations: configuration
+            )
             print("✅ ModelContainer created successfully")
             return container
         } catch {
             print("❌ Failed to create ModelContainer: \(error)")
             print("   Error type: \(type(of: error))")
-            fatalError("Cannot create ModelContainer: \(error)")
+
+            do {
+                try resetStoreFiles(at: storeURL)
+                let container = try ModelContainer(
+                    for: schema,
+                    configurations: configuration
+                )
+                print("⚠️ Recreated SwiftData store after removing incompatible files")
+                return container
+            } catch {
+                print("❌ Failed to recreate store on disk: \(error)")
+
+                do {
+                    let inMemoryConfiguration = ModelConfiguration(
+                        "MealVueFallback",
+                        schema: schema,
+                        isStoredInMemoryOnly: true,
+                        cloudKitDatabase: .none
+                    )
+                    let container = try ModelContainer(
+                        for: schema,
+                        configurations: inMemoryConfiguration
+                    )
+                    print("⚠️ Using in-memory SwiftData store fallback")
+                    return container
+                } catch {
+                    startupError = "Meal data could not be loaded."
+                    print("❌ Unable to create even an in-memory ModelContainer: \(error)")
+                    return nil
+                }
+            }
+        }
+    }
+
+    private var storeURL: URL {
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? URL.documentsDirectory
+        let directory = applicationSupport.appendingPathComponent("MealVue", isDirectory: true)
+
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try? FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+
+        return directory.appendingPathComponent("MealVue.store")
+    }
+
+    private func resetStoreFiles(at url: URL) throws {
+        let fileManager = FileManager.default
+        let sidecarURLs = [
+            url,
+            url.deletingPathExtension().appendingPathExtension("\(url.pathExtension)-shm"),
+            url.deletingPathExtension().appendingPathExtension("\(url.pathExtension)-wal")
+        ]
+
+        for sidecarURL in sidecarURLs where fileManager.fileExists(atPath: sidecarURL.path) {
+            try fileManager.removeItem(at: sidecarURL)
         }
     }
 }
 
 private struct LaunchView: View {
+    let startupError: String?
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -95,10 +165,16 @@ private struct LaunchView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                ProgressView()
-                    .tint(.green)
-                    .scaleEffect(1.15)
-                    .padding(.top, 8)
+                if let startupError {
+                    Text(startupError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                } else {
+                    ProgressView()
+                        .tint(.green)
+                        .scaleEffect(1.15)
+                        .padding(.top, 8)
+                }
             }
             .padding(24)
         }

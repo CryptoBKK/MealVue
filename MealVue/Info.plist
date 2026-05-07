@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+	<dict>
+		<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
+		<string>MealVue reads kidney-related lab records to compare food intake with health trends.</string>
+		<key>NSHealthShareUsageDescription</key>
+		<string>MealVue reads nutrition and kidney-related health data to show trends.</string>
+		<key>NSHealthUpdateUsageDescription</key>
+		<string>MealVue saves meal nutrition estimates to Apple Health.</string>
+	</dict>
+</plist>

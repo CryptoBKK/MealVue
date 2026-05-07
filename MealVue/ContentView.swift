@@ -39,13 +39,19 @@ struct ContentView: View {
                 }
                 .tag(3)
 
+            HealthTrendsView()
+                .tabItem {
+                    Label("Health", systemImage: "waveform.path.ecg")
+                }
+                .tag(4)
+
             SettingsView {
                 selectedTab = 0
             }
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
-                .tag(4)
+                .tag(5)
         }
         .tint(.green)
         .onAppear {
@@ -58,6 +64,15 @@ private struct DailyLogView: View {
     @Query(sort: \FoodEntry.timestamp, order: .reverse) private var entries: [FoodEntry]
     @Environment(\.modelContext) private var modelContext
 
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+    @AppStorage("ckdStage") private var ckdStageRaw = CKDStage.notSpecified.rawValue
+    @AppStorage("userWeightKg") private var userWeightKg = ""
+    @AppStorage("proteinTargetG") private var proteinTargetG = ""
+    @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
+    @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
+    @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
+
     private var todayEntries: [FoodEntry] {
         entries.filter { Calendar.current.isDateInToday($0.timestamp) }
     }
@@ -66,11 +81,56 @@ private struct DailyLogView: View {
         NutritionTotals(entries: todayEntries)
     }
 
+    private var selectedCKDStage: CKDStage {
+        CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
+    }
+
+    private var proteinTarget: Double {
+        parsedTarget(proteinTargetG) ?? RecommendedTargets.defaultProteinG(
+            for: selectedCKDStage,
+            weightKg: Double(userWeightKg.trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+    }
+
+    private var sodiumTarget: Double {
+        parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled)
+    }
+
+    private var potassiumTarget: Double {
+        parsedTarget(potassiumTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage) : 0)
+    }
+
+    private var phosphorusTarget: Double {
+        parsedTarget(phosphorusTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage) : 0)
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                Section("Today's Progress") {
+                    NutrientRingsView(
+                        proteinG: totals.proteinG,
+                        proteinTarget: proteinTarget,
+                        sodiumMg: totals.sodiumMg,
+                        sodiumTarget: sodiumTarget,
+                        potassiumMg: totals.potassiumMg,
+                        potassiumTarget: potassiumTarget,
+                        phosphorusMg: totals.phosphorusMg,
+                        phosphorusTarget: phosphorusTarget
+                    )
+                }
+
                 Section {
-                    TotalsCard(totals: totals)
+                    TotalsCard(totals: totals, trendEntries: entries)
+                }
+
+                Section("7-Day Trends") {
+                    NutrientSparklinesView(
+                        proteinTarget: proteinTarget,
+                        sodiumTarget: sodiumTarget,
+                        potassiumTarget: potassiumTarget,
+                        phosphorusTarget: phosphorusTarget
+                    )
                 }
 
                 if todayEntries.isEmpty {
@@ -1531,6 +1591,7 @@ private struct PhotoAnalysisView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
 
@@ -1825,6 +1886,9 @@ private struct PhotoAnalysisView: View {
         )
 
         modelContext.insert(entry)
+        Task {
+            try? await healthKitManager.save(entry: entry)
+        }
         onSave()
     }
 }
@@ -1834,6 +1898,7 @@ private struct TextAnalysisEntryView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
 
@@ -2020,6 +2085,9 @@ private struct TextAnalysisEntryView: View {
         )
 
         modelContext.insert(entry)
+        Task {
+            try? await healthKitManager.save(entry: entry)
+        }
         onSave()
     }
 }
@@ -2109,6 +2177,7 @@ private struct TotalsCard: View {
     @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
 
     let totals: NutritionTotals
+    var trendEntries: [FoodEntry] = []
 
     private var sodiumThreshold: Double {
         parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled)
@@ -2133,62 +2202,139 @@ private struct TotalsCard: View {
         CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(totals.calories)")
-                    .font(.system(size: 42, weight: .bold, design: .rounded))
-                    .foregroundStyle(.green)
-                Text("kcal")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(totals.entriesCount) meals")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 12) {
-                MacroSummaryCard(title: "Protein", value: totals.proteinG, tint: .blue)
-                MacroSummaryCard(title: "Carbs", value: totals.carbsG, tint: .green)
-                MacroSummaryCard(title: "Fat", value: totals.fatG, tint: .orange)
-                MacroSummaryCard(title: "Fiber", value: totals.fiberG, tint: .purple)
-            }
-
-            ProteinTargetRow(
+    private var dashboardItems: [DashboardRingItem] {
+        [
+            DashboardRingItem(
+                title: "Protein",
                 value: totals.proteinG,
-                threshold: proteinThreshold
+                target: proteinThreshold,
+                displayValue: "\(Int(totals.proteinG.rounded())) g",
+                targetLabel: "Target \(Int(proteinThreshold.rounded())) g",
+                accent: .blue
+            ),
+            DashboardRingItem(
+                title: "Sodium",
+                value: totals.sodiumMg,
+                target: sodiumThreshold,
+                displayValue: "\(Int(totals.sodiumMg.rounded())) mg",
+                targetLabel: "Target \(Int(sodiumThreshold.rounded())) mg",
+                accent: .orange
+            ),
+            DashboardRingItem(
+                title: "Potassium",
+                value: totals.potassiumMg,
+                target: potassiumThreshold ?? 3000,
+                displayValue: "\(Int(totals.potassiumMg.rounded())) mg",
+                targetLabel: "Target \(Int((potassiumThreshold ?? 3000).rounded())) mg",
+                accent: .yellow
+            ),
+            DashboardRingItem(
+                title: "Phosphorus",
+                value: totals.phosphorusMg,
+                target: phosphorusThreshold ?? 1000,
+                displayValue: "\(Int(totals.phosphorusMg.rounded())) mg",
+                targetLabel: "Target \(Int((phosphorusThreshold ?? 1000).rounded())) mg",
+                accent: .purple
             )
+        ]
+    }
 
-            Divider()
+    private var sparklineItems: [DashboardSparklineItem] {
+        let lastSevenDays = sevenDaySections(from: trendEntries)
+
+        return [
+            DashboardSparklineItem(
+                title: "Protein",
+                values: lastSevenDays.map { $0.totals.proteinG },
+                target: proteinThreshold,
+                accent: .blue,
+                unit: "g"
+            ),
+            DashboardSparklineItem(
+                title: "Sodium",
+                values: lastSevenDays.map { $0.totals.sodiumMg },
+                target: sodiumThreshold,
+                accent: .orange,
+                unit: "mg"
+            ),
+            DashboardSparklineItem(
+                title: "Potassium",
+                values: lastSevenDays.map { $0.totals.potassiumMg },
+                target: potassiumThreshold ?? 3000,
+                accent: .yellow,
+                unit: "mg"
+            ),
+            DashboardSparklineItem(
+                title: "Phosphorus",
+                values: lastSevenDays.map { $0.totals.phosphorusMg },
+                target: phosphorusThreshold ?? 1000,
+                accent: .purple,
+                unit: "mg"
+            )
+        ]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Today")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    Text("\(totals.calories)")
+                        .font(.system(size: 46, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.primary)
+                    Text("kcal across \(totals.entriesCount) meals")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 8) {
+                        DashboardStatusDot(color: .green, label: "< 80%")
+                        DashboardStatusDot(color: .yellow, label: "80–100%")
+                        DashboardStatusDot(color: .red, label: "> 100%")
+                    }
+                    .font(.caption2)
+                }
+            }
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 2), spacing: 14) {
+                ForEach(dashboardItems) { item in
+                    NutrientRingCard(item: item)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Daily Mineral Totals")
+                Text("7-Day Trends")
                     .font(.headline)
 
-                MineralTotalRow(
-                    title: "Sodium",
-                    value: totals.sodiumMg,
-                    threshold: sodiumThreshold,
-                    note: "Target \(Int(sodiumThreshold)) mg/day"
-                )
-
-                MineralTotalRow(
-                    title: "Potassium",
-                    value: totals.potassiumMg,
-                    threshold: potassiumThreshold,
-                    note: potassiumThreshold == nil ? "Tracking only" : "Target \(Int(potassiumThreshold ?? 0)) mg/day"
-                )
-
-                MineralTotalRow(
-                    title: "Phosphorus",
-                    value: totals.phosphorusMg,
-                    threshold: phosphorusThreshold,
-                    note: phosphorusThreshold == nil ? "Tracking only" : "Target \(Int(phosphorusThreshold ?? 0)) mg/day"
-                )
+                ForEach(sparklineItems) { item in
+                    NutrientSparklineRow(item: item)
+                }
             }
         }
-        .padding(.vertical, 8)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.96, green: 0.98, blue: 0.99),
+                            Color(red: 0.92, green: 0.96, blue: 0.94)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.white.opacity(0.75), lineWidth: 1)
+        )
     }
 
     private func parsedTarget(_ text: String) -> Double? {
@@ -2196,80 +2342,194 @@ private struct TotalsCard: View {
         guard !trimmed.isEmpty else { return nil }
         return Double(trimmed)
     }
-}
+    
+    private func sevenDaySections(from entries: [FoodEntry]) -> [HistorySection] {
+        let calendar = Calendar.current
+        let startOfToday = calendar.startOfDay(for: Date())
 
-private struct MineralTotalRow: View {
-    let title: String
-    let value: Double
-    let threshold: Double?
-    let note: String
-
-    private var isHigh: Bool {
-        guard let threshold else { return false }
-        return value > threshold
-    }
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Text("\(Int(value)) mg")
-                .font(.subheadline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(isHigh ? .red : .primary)
+        return (0..<7).reversed().compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: startOfToday) else { return nil }
+            let dayEntries = entries.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }
+            return HistorySection(date: date, entries: dayEntries)
         }
     }
 }
 
-private struct ProteinTargetRow: View {
+private struct DashboardRingItem: Identifiable {
+    let id = UUID()
+    let title: String
     let value: Double
-    let threshold: Double
+    let target: Double
+    let displayValue: String
+    let targetLabel: String
+    let accent: Color
 
-    private var isHigh: Bool {
-        value > threshold
+    var progress: Double {
+        guard target > 0 else { return 0 }
+        return value / target
     }
 
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Protein")
-                    .font(.subheadline.weight(.semibold))
-                Text("Target \(Int(threshold)) g/day")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    var normalizedProgress: Double {
+        min(progress, 1.2)
+    }
 
-            Spacer()
-
-            Text("\(Int(value)) g")
-                .font(.subheadline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(isHigh ? .red : .primary)
+    var statusColor: Color {
+        switch progress {
+        case ..<0.8:
+            return .green
+        case ..<1.0:
+            return .yellow
+        default:
+            return .red
         }
     }
 }
 
-private struct MacroSummaryCard: View {
+private struct DashboardSparklineItem: Identifiable {
+    let id = UUID()
     let title: String
-    let value: Double
-    let tint: Color
+    let values: [Double]
+    let target: Double
+    let accent: Color
+    let unit: String
+
+    var latestValueText: String {
+        "\(Int((values.last ?? 0).rounded())) \(unit)"
+    }
+}
+
+private struct DashboardStatusDot: View {
+    let color: Color
+    let label: String
 
     var body: some View {
-        VStack(spacing: 4) {
-            Text("\(Int(value))g")
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(tint)
-            Text(title)
-                .font(.caption)
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(label)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct NutrientRingCard: View {
+    let item: DashboardRingItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(item.title)
+                    .font(.headline)
+                Spacer()
+                Text(item.targetLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(item.accent.opacity(0.14), lineWidth: 14)
+
+                    Circle()
+                        .trim(from: 0, to: item.normalizedProgress)
+                        .stroke(
+                            AngularGradient(
+                                colors: [item.accent.opacity(0.4), item.accent, item.statusColor],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 14, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+
+                    VStack(spacing: 2) {
+                        Text("\(Int((item.progress * 100).rounded()))%")
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                        Text("of goal")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 108, height: 108)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(item.displayValue)
+                        .font(.title3.monospacedDigit().weight(.bold))
+                        .foregroundStyle(.primary)
+                    Text(statusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(item.statusColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(item.statusColor.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var statusText: String {
+        switch item.progress {
+        case ..<0.8:
+            return "On Track"
+        case ..<1.0:
+            return "Caution"
+        default:
+            return "Exceeded"
+        }
+    }
+}
+
+private struct NutrientSparklineRow: View {
+    let item: DashboardSparklineItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(item.latestValueText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            GeometryReader { proxy in
+                let values = item.values
+                let maxValue = max(values.max() ?? 0, item.target, 1)
+                let barWidth = max((proxy.size.width - 36) / 7, 8)
+
+                HStack(alignment: .bottom, spacing: 6) {
+                    ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(barColor(for: value))
+                            .frame(
+                                width: barWidth,
+                                height: max(CGFloat(value / maxValue) * proxy.size.height, 6)
+                            )
+                    }
+                }
+            }
+            .frame(height: 44)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func barColor(for value: Double) -> Color {
+        let progress = value / item.target
+        switch progress {
+        case ..<0.8:
+            return item.accent.opacity(0.72)
+        case ..<1.0:
+            return .yellow
+        default:
+            return .red
+        }
     }
 }
 
