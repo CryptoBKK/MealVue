@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+
+# Xcode user/workspace state
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.moved-aside
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# Build outputs
+build/
+Products/
+*.app
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# App Store export artifacts
+ExportOptions.plist
+*.xcarchive
+
+# Local environment and service caches
+.env
+.env.*
+.wrangler/
+
