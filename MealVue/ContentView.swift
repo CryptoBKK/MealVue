@@ -4,10 +4,12 @@
 //  Created by Quinn Rieman on 28/4/26.
 //
 
+import Charts
 import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
+import VisionKit
 
 struct ContentView: View {
     var onReady: () -> Void = {}
@@ -97,21 +99,27 @@ private struct DailyLogView: View {
         parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled)
     }
 
-    private var potassiumTarget: Double {
-        parsedTarget(potassiumTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage) : 0)
+    private var potassiumTarget: Double? {
+        parsedTarget(potassiumTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage) : nil)
     }
 
-    private var phosphorusTarget: Double {
-        parsedTarget(phosphorusTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage) : 0)
+    private var phosphorusTarget: Double? {
+        parsedTarget(phosphorusTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage) : nil)
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Today's Progress") {
+                Section {
+                    TotalsCard(totals: totals)
+                }
+
+                Section("Progress Rings") {
                     NutrientRingsView(
                         proteinG: totals.proteinG,
                         proteinTarget: proteinTarget,
+                        fiberG: totals.fiberG,
+                        fiberTarget: nil,
                         sodiumMg: totals.sodiumMg,
                         sodiumTarget: sodiumTarget,
                         potassiumMg: totals.potassiumMg,
@@ -121,17 +129,8 @@ private struct DailyLogView: View {
                     )
                 }
 
-                Section {
-                    TotalsCard(totals: totals, trendEntries: entries)
-                }
-
-                Section("7-Day Trends") {
-                    NutrientSparklinesView(
-                        proteinTarget: proteinTarget,
-                        sodiumTarget: sodiumTarget,
-                        potassiumTarget: potassiumTarget,
-                        phosphorusTarget: phosphorusTarget
-                    )
+                Section("Nutrition Bar Graph") {
+                    BarGraphView(totals: totals, title: "Today's Nutrition")
                 }
 
                 if todayEntries.isEmpty {
@@ -188,9 +187,13 @@ private struct LogFoodView: View {
     @Binding var selectedTab: Int
 
     @State private var showCamera = false
+    @State private var showBarcodeScanner = false
     @State private var pickerItem: PhotosPickerItem?
     @State private var pendingImage: IdentifiableImage?
+    @State private var pendingBarcodeProduct: BarcodeProduct?
     @State private var showTextEntry = false
+    @State private var barcodeLookupMessage = ""
+    @State private var isLookingUpBarcode = false
 
     var body: some View {
         NavigationStack {
@@ -211,33 +214,7 @@ private struct LogFoodView: View {
                     }
                     .padding(.top, 30)
 
-                    #if targetEnvironment(simulator)
-                    // Simulator tip: drag images from Finder to simulator window to add to Photos
-                    Text("Simulator tip: Drag an image from Finder onto the simulator window to add to Photos, then use 'Choose from Library' above.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    #endif
-
                     VStack(spacing: 14) {
-                        #if targetEnvironment(simulator)
-                        // Simulator: offer bundled Thai food images as mock camera
-                        Menu {
-                            Button("Pad Thai") { loadBundledImage(named: "pad_thai") }
-                            Button("Som Tam") { loadBundledImage(named: "som_tam") }
-                            Button("Tom Yum") { loadBundledImage(named: "tom_yum") }
-                            Button("Gaeng Daeng") { loadBundledImage(named: "gaeng_daeng") }
-                            Button("Khao Pad") { loadBundledImage(named: "khao_pad") }
-                        } label: {
-                            ActionButtonLabel(
-                                title: "Mock Camera (Sim)",
-                                systemImage: "camera.fill",
-                                fill: Color.green,
-                                foreground: .white
-                            )
-                        }
-                        #else
                         Button {
                             showCamera = true
                         } label: {
@@ -248,7 +225,6 @@ private struct LogFoodView: View {
                                 foreground: .white
                             )
                         }
-                        #endif
 
                         PhotosPicker(selection: $pickerItem, matching: .images) {
                             ActionButtonLabel(
@@ -269,6 +245,28 @@ private struct LogFoodView: View {
                                 foreground: .green
                             )
                         }
+
+                        Button {
+                            showBarcodeScanner = true
+                        } label: {
+                            ActionButtonLabel(
+                                title: "Scan Barcode",
+                                systemImage: "barcode.viewfinder",
+                                fill: Color.green.opacity(0.12),
+                                foreground: .green
+                            )
+                        }
+                    }
+
+                    if isLookingUpBarcode {
+                        ProgressView("Looking up barcode...")
+                    }
+
+                    if !barcodeLookupMessage.isEmpty {
+                        InfoBanner(
+                            title: "Barcode lookup",
+                            message: barcodeLookupMessage
+                        )
                     }
 
                     if !Config.isConfigured {
@@ -285,16 +283,27 @@ private struct LogFoodView: View {
         }
         .sheet(isPresented: $showCamera) {
             ImagePicker(sourceType: .camera) { image in
-                Task {
-                    try? await Task.sleep(for: .milliseconds(350))
-                    pendingImage = IdentifiableImage(image: image)
-                }
+                pendingImage = IdentifiableImage(image: image)
             }
             .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showBarcodeScanner) {
+            BarcodeScannerView { barcode in
+                showBarcodeScanner = false
+                Task {
+                    await lookupBarcode(barcode)
+                }
+            }
         }
         .sheet(item: $pendingImage) { item in
             PhotoAnalysisView(image: item.image) {
                 pendingImage = nil
+                selectedTab = 0
+            }
+        }
+        .sheet(item: $pendingBarcodeProduct) { product in
+            BarcodeProductEntryView(product: product) {
+                pendingBarcodeProduct = nil
                 selectedTab = 0
             }
         }
@@ -318,15 +327,23 @@ private struct LogFoodView: View {
         }
     }
 
-    #if targetEnvironment(simulator)
-    private func loadBundledImage(named name: String) {
-        guard let image = UIImage(named: name) else {
-            print("⚠️ Bundled image not found: \(name)")
-            return
+    private func lookupBarcode(_ barcode: String) async {
+        let trimmed = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        isLookingUpBarcode = true
+        barcodeLookupMessage = ""
+        defer { isLookingUpBarcode = false }
+
+        do {
+            let product = try await BarcodeLookupService.lookup(barcode: trimmed)
+            try? await Task.sleep(for: .milliseconds(250))
+            pendingBarcodeProduct = product
+        } catch {
+            barcodeLookupMessage = error.localizedDescription
         }
-        pendingImage = IdentifiableImage(image: image)
     }
-    #endif
+
 }
 
 private struct HistoryView: View {
@@ -599,6 +616,38 @@ private struct ReportMetricChip: View {
     }
 }
 
+private struct ShoppingHelperCard: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "cart.badge.questionmark")
+                .font(.title2)
+                .foregroundStyle(.white)
+                .frame(width: 48, height: 48)
+                .background(Color.green)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Shopping Helper")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text("Scan a barcode or photo-check food before buying.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
 private struct GuideRootView: View {
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
@@ -814,6 +863,13 @@ private struct GuideRootView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     heroCard
 
+                    NavigationLink {
+                        ShoppingHelperView()
+                    } label: {
+                        ShoppingHelperCard()
+                    }
+                    .buttonStyle(.plain)
+
                     sectionHeader(
                         title: "Usually Better Choices",
                         subtitle: "Common kidney-friendlier foods for many adults with chronic kidney disease."
@@ -921,9 +977,482 @@ private struct GuideRootView: View {
     }
 }
 
+private struct ShoppingHelperView: View {
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+    @AppStorage("ckdStage") private var ckdStageRaw = CKDStage.notSpecified.rawValue
+    @AppStorage("userWeightKg") private var userWeightKg = ""
+    @AppStorage("proteinTargetG") private var proteinTargetG = ""
+    @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
+    @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
+    @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
+
+    @State private var showCamera = false
+    @State private var showBarcodeScanner = false
+    @State private var isChecking = false
+    @State private var statusMessage = ""
+    @State private var result: ShoppingCheckResult?
+
+    private var selectedCKDStage: CKDStage {
+        CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
+    }
+
+    private var targets: NutritionTargets {
+        NutritionTargets(
+            proteinG: parsedTarget(proteinTargetG) ?? RecommendedTargets.defaultProteinG(
+                for: selectedCKDStage,
+                weightKg: Double(userWeightKg.trimmingCharacters(in: .whitespacesAndNewlines))
+            ),
+            sodiumMg: parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled),
+            potassiumMg: parsedTarget(potassiumTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPotassiumMg(for: selectedCKDStage) : nil),
+            phosphorusMg: parsedTarget(phosphorusTargetMg) ?? (kidneyChecksEnabled ? RecommendedTargets.defaultPhosphorusMg(for: selectedCKDStage) : nil)
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Shopping Helper")
+                        .font(.largeTitle.bold())
+
+                    Text("Check a product against your current kidney and heart settings before it goes in the cart.")
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        showCamera = true
+                    } label: {
+                        ActionButtonLabel(
+                            title: "Photo Check",
+                            systemImage: "camera.fill",
+                            fill: Color.green,
+                            foreground: .white
+                        )
+                    }
+
+                    Button {
+                        showBarcodeScanner = true
+                    } label: {
+                        ActionButtonLabel(
+                            title: "Scan Barcode",
+                            systemImage: "barcode.viewfinder",
+                            fill: Color.green.opacity(0.12),
+                            foreground: .green
+                        )
+                    }
+                }
+
+                if isChecking {
+                    ProgressView("Checking food...")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 20)
+                }
+
+                if !statusMessage.isEmpty {
+                    InfoBanner(title: "Shopping check", message: statusMessage)
+                }
+
+                if let result {
+                    ShoppingCheckResultCard(result: result)
+                } else {
+                    ShoppingEmptyState()
+                }
+            }
+            .padding(20)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Shopping Helper")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showCamera) {
+            ImagePicker(sourceType: .camera) { image in
+                Task {
+                    await checkPhoto(image)
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showBarcodeScanner) {
+            BarcodeScannerView { barcode in
+                showBarcodeScanner = false
+                Task {
+                    await checkBarcode(barcode)
+                }
+            }
+        }
+    }
+
+    private func checkPhoto(_ image: UIImage) async {
+        guard Config.isConfigured else {
+            statusMessage = "Photo checks need an AI provider and API key in Settings."
+            return
+        }
+
+        isChecking = true
+        statusMessage = ""
+        defer { isChecking = false }
+
+        do {
+            let nutrition = try await ClaudeService.analyzeFood(image: image)
+            let snapshot = ShoppingNutritionSnapshot(nutritionResult: nutrition)
+            result = ShoppingDietEvaluator.evaluate(
+                snapshot: snapshot,
+                source: "Photo estimate",
+                targets: targets,
+                kidneyChecksEnabled: kidneyChecksEnabled,
+                heartChecksEnabled: heartChecksEnabled
+            )
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    private func checkBarcode(_ barcode: String) async {
+        let trimmed = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        isChecking = true
+        statusMessage = ""
+        defer { isChecking = false }
+
+        do {
+            let product = try await BarcodeLookupService.lookup(barcode: trimmed)
+            let snapshot = ShoppingNutritionSnapshot(product: product, amount: product.defaultAmountG)
+            result = ShoppingDietEvaluator.evaluate(
+                snapshot: snapshot,
+                source: "Barcode lookup",
+                targets: targets,
+                kidneyChecksEnabled: kidneyChecksEnabled,
+                heartChecksEnabled: heartChecksEnabled
+            )
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    private func parsedTarget(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Double(trimmed)
+    }
+}
+
+private struct ShoppingNutritionSnapshot {
+    let name: String
+    let quantity: String
+    let calories: Int
+    let proteinG: Double
+    let carbsG: Double
+    let fatG: Double
+    let fiberG: Double
+    let sodiumMg: Double
+    let potassiumMg: Double
+    let phosphorusMg: Double
+    let notes: String
+
+    init(nutritionResult: NutritionResult) {
+        name = nutritionResult.foodName
+        quantity = nutritionResult.estimatedQuantity
+        calories = nutritionResult.calories
+        proteinG = nutritionResult.proteinG
+        carbsG = nutritionResult.carbsG
+        fatG = nutritionResult.fatG
+        fiberG = nutritionResult.fiberG
+        sodiumMg = nutritionResult.sodiumMg
+        potassiumMg = nutritionResult.potassiumMg
+        phosphorusMg = nutritionResult.phosphorusMg
+        notes = nutritionResult.notes
+    }
+
+    init(product: BarcodeProduct, amount: Double) {
+        let multiplier = amount / 100
+        name = product.displayName
+        quantity = "\(format(amount)) g/ml"
+        calories = Int((product.caloriesPer100G * multiplier).rounded())
+        proteinG = product.proteinPer100G * multiplier
+        carbsG = product.carbsPer100G * multiplier
+        fatG = product.fatPer100G * multiplier
+        fiberG = product.fiberPer100G * multiplier
+        sodiumMg = product.sodiumPer100GMg * multiplier
+        potassiumMg = product.potassiumPer100GMg * multiplier
+        phosphorusMg = product.phosphorusPer100GMg * multiplier
+        notes = product.servingSize.isEmpty ? "Barcode: \(product.barcode)" : "Serving: \(product.servingSize) | Barcode: \(product.barcode)"
+    }
+}
+
+private struct ShoppingCheckResult {
+    enum Recommendation {
+        case buy
+        case caution
+        case avoid
+
+        var title: String {
+            switch self {
+            case .buy: return "OK to buy"
+            case .caution: return "Buy with caution"
+            case .avoid: return "Not a good fit"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .buy: return "checkmark.circle.fill"
+            case .caution: return "exclamationmark.triangle.fill"
+            case .avoid: return "xmark.octagon.fill"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .buy: return .green
+            case .caution: return .orange
+            case .avoid: return .red
+            }
+        }
+    }
+
+    let snapshot: ShoppingNutritionSnapshot
+    let source: String
+    let recommendation: Recommendation
+    let warnings: [String]
+    let positives: [String]
+}
+
+private enum ShoppingDietEvaluator {
+    static func evaluate(
+        snapshot: ShoppingNutritionSnapshot,
+        source: String,
+        targets: NutritionTargets,
+        kidneyChecksEnabled: Bool,
+        heartChecksEnabled: Bool
+    ) -> ShoppingCheckResult {
+        var warnings: [String] = []
+        var positives: [String] = []
+        var severity = 0
+
+        evaluate(
+            value: snapshot.sodiumMg,
+            target: targets.sodiumMg,
+            name: "sodium",
+            cautionFraction: heartChecksEnabled ? 0.20 : 0.25,
+            avoidFraction: heartChecksEnabled ? 0.35 : 0.45,
+            unit: "mg",
+            warnings: &warnings,
+            severity: &severity
+        )
+
+        if kidneyChecksEnabled {
+            evaluate(
+                value: snapshot.potassiumMg,
+                target: targets.potassiumMg,
+                name: "potassium",
+                cautionFraction: 0.25,
+                avoidFraction: 0.40,
+                unit: "mg",
+                warnings: &warnings,
+                severity: &severity
+            )
+
+            evaluate(
+                value: snapshot.phosphorusMg,
+                target: targets.phosphorusMg,
+                name: "phosphorus",
+                cautionFraction: 0.25,
+                avoidFraction: 0.40,
+                unit: "mg",
+                warnings: &warnings,
+                severity: &severity
+            )
+
+            if snapshot.proteinG > targets.proteinG * 0.40 {
+                warnings.append("This serving uses a large share of the daily protein target.")
+                severity = max(severity, 1)
+            }
+        }
+
+        if heartChecksEnabled {
+            if snapshot.fatG >= 20 {
+                warnings.append("Fat is high for one serving. Check the label for saturated fat.")
+                severity = max(severity, 1)
+            }
+
+            if snapshot.fiberG >= 5 {
+                positives.append("Good fiber for heart health if potassium and phosphorus fit your plan.")
+            }
+        }
+
+        if snapshot.sodiumMg <= targets.sodiumMg * 0.15 {
+            positives.append("Sodium is relatively low for one serving.")
+        }
+
+        if kidneyChecksEnabled,
+           (targets.potassiumMg == nil || snapshot.potassiumMg <= (targets.potassiumMg ?? .greatestFiniteMagnitude) * 0.20),
+           (targets.phosphorusMg == nil || snapshot.phosphorusMg <= (targets.phosphorusMg ?? .greatestFiniteMagnitude) * 0.20) {
+            positives.append("Potassium and phosphorus look reasonable for this serving.")
+        }
+
+        let recommendation: ShoppingCheckResult.Recommendation
+        if severity >= 2 {
+            recommendation = .avoid
+        } else if severity == 1 || !warnings.isEmpty {
+            recommendation = .caution
+        } else {
+            recommendation = .buy
+        }
+
+        return ShoppingCheckResult(
+            snapshot: snapshot,
+            source: source,
+            recommendation: recommendation,
+            warnings: warnings,
+            positives: positives
+        )
+    }
+
+    private static func evaluate(
+        value: Double,
+        target: Double?,
+        name: String,
+        cautionFraction: Double,
+        avoidFraction: Double,
+        unit: String,
+        warnings: inout [String],
+        severity: inout Int
+    ) {
+        guard let target, target > 0 else { return }
+
+        let fraction = value / target
+        if fraction >= avoidFraction {
+            warnings.append("\(name.capitalized) is high: \(Int(value.rounded())) \(unit), about \(Int((fraction * 100).rounded()))% of the daily target.")
+            severity = max(severity, 2)
+        } else if fraction >= cautionFraction {
+            warnings.append("\(name.capitalized) needs caution: \(Int(value.rounded())) \(unit), about \(Int((fraction * 100).rounded()))% of the daily target.")
+            severity = max(severity, 1)
+        }
+    }
+}
+
+private struct ShoppingCheckResultCard: View {
+    let result: ShoppingCheckResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: result.recommendation.systemImage)
+                    .font(.title2)
+                    .foregroundStyle(result.recommendation.tint)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(result.recommendation.title)
+                        .font(.title2.bold())
+
+                    Text(result.snapshot.name)
+                        .font(.headline)
+
+                    Text("\(result.source) | \(result.snapshot.quantity.isEmpty ? "serving estimate" : result.snapshot.quantity)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ShoppingMetricTile(title: "Calories", value: "\(result.snapshot.calories)", tint: .green)
+                ShoppingMetricTile(title: "Protein", value: "\(Int(result.snapshot.proteinG.rounded())) g", tint: .blue)
+                ShoppingMetricTile(title: "Sodium", value: "\(Int(result.snapshot.sodiumMg.rounded())) mg", tint: .orange)
+                ShoppingMetricTile(title: "Potassium", value: "\(Int(result.snapshot.potassiumMg.rounded())) mg", tint: .yellow)
+                ShoppingMetricTile(title: "Phosphorus", value: "\(Int(result.snapshot.phosphorusMg.rounded())) mg", tint: .purple)
+                ShoppingMetricTile(title: "Fiber", value: "\(Int(result.snapshot.fiberG.rounded())) g", tint: .teal)
+            }
+
+            if !result.warnings.isEmpty {
+                ShoppingMessageGroup(title: "Warnings", systemImage: "exclamationmark.triangle.fill", tint: .orange, messages: result.warnings)
+            }
+
+            if !result.positives.isEmpty {
+                ShoppingMessageGroup(title: "Why it may fit", systemImage: "checkmark.circle.fill", tint: .green, messages: result.positives)
+            }
+
+            if !result.snapshot.notes.isEmpty {
+                Text(result.snapshot.notes)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .background(Color(.secondarySystemGroupedBackground))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(result.recommendation.tint, lineWidth: 3)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+private struct ShoppingMetricTile: View {
+    let title: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(value)
+                .font(.headline)
+                .foregroundStyle(tint)
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(tint.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct ShoppingMessageGroup: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let messages: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .foregroundStyle(tint)
+
+            ForEach(messages, id: \.self) { message in
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+            }
+        }
+    }
+}
+
+private struct ShoppingEmptyState: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Ready to check a food", systemImage: "cart.fill")
+                .font(.headline)
+
+            Text("Use a barcode for packaged food, or take a photo when there is no barcode. Results use your current kidney and heart settings.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
 private struct SettingsView: View {
     var onDone: () -> Void = {}
     @AppStorage("anthropicAPIKey") private var anthropicAPIKey = ""
+    @AppStorage("anthropicModelID") private var anthropicModelID = AnthropicModel.defaultModel.id
     @AppStorage("geminiAPIKey") private var geminiAPIKey = ""
     @AppStorage("geminiModelID") private var geminiModelID = GeminiModel.defaultModel.id
     @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
@@ -952,42 +1481,13 @@ private struct SettingsView: View {
     @FocusState private var focusedField: SettingsField?
     @State private var geminiModels: [GeminiModel] = GeminiModel.defaults
     @State private var openAIModels: [OpenAIModel] = OpenAIModel.defaults
-    @State private var openRouterModels: [OpenRouterModel] = [.autoRouter, .freeRouter]
+    @State private var openRouterModels: [OpenRouterModel] = OpenRouterModel.recommended
     @State private var isLoadingGeminiModels = false
     @State private var isLoadingOpenAIModels = false
     @State private var isLoadingModels = false
     @State private var geminiError = ""
     @State private var openAIError = ""
     @State private var openRouterError = ""
-    @State private var documentsPath = ""
-
-    #if targetEnvironment(simulator)
-    private func copyBundledImagesToDocuments() {
-        let fileManager = FileManager.default
-        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            documentsPath = "Could not find Documents directory"
-            return
-        }
-        let images = ["pad_thai", "som_tam", "tom_yum", "gaeng_daeng", "khao_pad"]
-        var copied: [String] = []
-        for name in images {
-            guard let image = UIImage(named: name) else { continue }
-            guard let data = image.pngData() else { continue }
-            let fileURL = documentsURL.appendingPathComponent("\(name).png")
-            do {
-                try data.write(to: fileURL)
-                copied.append(name)
-            } catch {
-                print("Failed to write \(name): \(error)")
-            }
-        }
-        documentsPath = documentsURL.path
-        print("✅ Copied \(copied.count) images to: \(documentsURL.path)")
-        // Also copy to pasteboard for convenience
-        UIPasteboard.general.string = documentsURL.path
-    }
-    #endif
-
     private var selectedProvider: AIProvider {
         AIProvider(rawValue: aiProviderRaw) ?? .anthropic
     }
@@ -1026,6 +1526,12 @@ private struct SettingsView: View {
                         Text(anthropicAPIKey.isEmpty ? "No Anthropic API key saved." : "Anthropic API key saved.")
                             .font(.footnote.weight(.semibold))
                             .foregroundColor(anthropicAPIKey.isEmpty ? .secondary : .green)
+
+                        Picker("Claude Model", selection: $anthropicModelID) {
+                            ForEach(AnthropicModel.defaults) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
                     } else if selectedProvider == .gemini {
                         APIKeyField(
                             title: "Google Gemini API Key",
@@ -1046,7 +1552,7 @@ private struct SettingsView: View {
 
                         Picker("Gemini Model", selection: $geminiModelID) {
                             ForEach(geminiModels) { model in
-                                Text(model.displayName).tag(model.id)
+                                Text("\(model.displayName) • Vision").tag(model.id)
                             }
                         }
 
@@ -1056,7 +1562,7 @@ private struct SettingsView: View {
                                 .foregroundStyle(.orange)
                         }
 
-                        Text("Uses Google's Gemini generateContent API for text and image understanding.")
+                        Text("Uses Google's Gemini generateContent API. Refresh only shows models expected to support food photo analysis.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -1083,7 +1589,7 @@ private struct SettingsView: View {
 
                         Picker("OpenAI Model", selection: $openAIModelID) {
                             ForEach(openAIModels) { model in
-                                Text(model.displayName).tag(model.id)
+                                Text("\(model.displayName) • Vision").tag(model.id)
                             }
                         }
 
@@ -1093,7 +1599,7 @@ private struct SettingsView: View {
                                 .foregroundStyle(.orange)
                         }
 
-                        Text("Uses OpenAI's Chat Completions API with image or text inputs.")
+                        Text("Uses OpenAI's Chat Completions API. Refresh only shows models expected to support image inputs.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -1206,70 +1712,6 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Demo Data") {
-                    Button("Load Thai Sample Data (Somchai, Stage 3)") {
-                        SampleDataGenerator.loadSampleData(into: modelContext)
-                        // Auto-set Somchai's profile for testing
-                        ckdStageRaw = CKDStage.stage3to4.rawValue
-                        proteinTargetG = "80"
-                        sodiumTargetMg = "2000"
-                        potassiumTargetMg = "3000"
-                        phosphorusTargetMg = "1000"
-                        userAge = "58"
-                        userSex = UserSex.male.rawValue
-                        userWeightKg = "72"
-                        userHeightCm = "168"
-                    }
-
-                    Button("Clear Sample Data") {
-                        SampleDataGenerator.clearSampleData(from: modelContext)
-                    }
-                    .foregroundStyle(.red)
-
-                    Text("Loads 30 days of Thai meal entries with Somchai's CKD Stage 3 profile. Clears only sample entries.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                #if targetEnvironment(simulator)
-                Section("Simulator Setup") {
-                    Button("Copy Thai Food Images to Documents") {
-                        copyBundledImagesToDocuments()
-                    }
-                    if !documentsPath.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Images copied to:")
-                                .font(.footnote)
-                            HStack {
-                                Text(documentsPath)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer()
-                                Button("Copy") {
-                                    UIPasteboard.general.string = documentsPath
-                                }
-                                .buttonStyle(.bordered)
-                                .font(.caption)
-                                Button("Share") {
-                                    let activityVC = UIActivityViewController(activityItems: [documentsPath], applicationActivities: nil)
-                                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                                       let rootVC = windowScene.keyWindow?.rootViewController {
-                                        rootVC.present(activityVC, animated: true)
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .font(.caption)
-                            }
-                        }
-                    }
-                    Text("Tip: Tap 'Share' to AirDrop the path to your Mac, or copy from Xcode's console.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                #endif
-
                 Section("About This App") {
                     Label("MealVue food logging with photo capture", systemImage: "camera.fill")
                     Label("Manual and AI-assisted nutrition entry", systemImage: "square.and.pencil")
@@ -1292,7 +1734,7 @@ private struct SettingsView: View {
                     await loadOpenAIModels()
                 }
 
-                guard selectedProvider == .openRouter, openRouterModels.count <= 2, !openRouterAPIKey.isEmpty else { return }
+                guard selectedProvider == .openRouter, openRouterModels.count <= OpenRouterModel.recommended.count, !openRouterAPIKey.isEmpty else { return }
                 await loadOpenRouterModels()
             }
             .toolbar {
@@ -1316,7 +1758,7 @@ private struct SettingsView: View {
     private func loadOpenRouterModels() async {
         let key = openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
-            openRouterModels = [.autoRouter, .freeRouter]
+            openRouterModels = OpenRouterModel.recommended
             openRouterError = ""
             return
         }
@@ -1326,7 +1768,7 @@ private struct SettingsView: View {
 
         do {
             let fetched = try await ClaudeService.fetchOpenRouterModels(apiKey: key)
-            openRouterModels = fetched.isEmpty ? [.autoRouter, .freeRouter] : fetched
+            openRouterModels = fetched.isEmpty ? OpenRouterModel.recommended : fetched
 
             if !openRouterModels.contains(where: { $0.id == openRouterModelID }) {
                 openRouterModelID = openRouterModels.first?.id ?? OpenRouterModel.autoRouter.id
@@ -1334,7 +1776,7 @@ private struct SettingsView: View {
 
             openRouterError = fetched.isEmpty ? "No OpenRouter models were returned for this key. Auto Router and Free Router are still available." : ""
         } catch {
-            openRouterModels = [.autoRouter, .freeRouter]
+            openRouterModels = OpenRouterModel.recommended
             openRouterModelID = OpenRouterModel.autoRouter.id
             openRouterError = error.localizedDescription
         }
@@ -1367,11 +1809,11 @@ private struct SettingsView: View {
             let fetched = try await ClaudeService.fetchGeminiModels(apiKey: key)
             geminiModels = fetched.isEmpty ? GeminiModel.defaults : fetched
 
-            if !geminiModels.contains(where: { $0.id == geminiModelID }) {
+            if GeminiModel.shouldResetSelection(geminiModelID) || !geminiModels.contains(where: { $0.id == geminiModelID }) {
                 geminiModelID = geminiModels.first?.id ?? GeminiModel.defaultModel.id
             }
 
-            geminiError = fetched.isEmpty ? "No Gemini generateContent models were returned. Falling back to defaults." : ""
+            geminiError = fetched.isEmpty ? "No Gemini vision-compatible generateContent models were returned. Falling back to defaults." : ""
         } catch {
             geminiModels = GeminiModel.defaults
             geminiModelID = GeminiModel.defaultModel.id
@@ -1596,6 +2038,379 @@ private struct FoodEntryDetailView: View {
             Spacer()
             Text(value)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct BarcodeProduct: Identifiable {
+    let barcode: String
+    let name: String
+    let brand: String
+    let packageQuantity: String
+    let servingSize: String
+    let servingQuantityG: Double?
+    let caloriesPer100G: Double
+    let proteinPer100G: Double
+    let carbsPer100G: Double
+    let fatPer100G: Double
+    let fiberPer100G: Double
+    let sodiumPer100GMg: Double
+    let potassiumPer100GMg: Double
+    let phosphorusPer100GMg: Double
+
+    var id: String { barcode }
+
+    var displayName: String {
+        if brand.isEmpty { return name }
+        return "\(name) - \(brand)"
+    }
+
+    var defaultAmountG: Double {
+        servingQuantityG ?? 100
+    }
+}
+
+private struct BarcodeScannerView: View {
+    var onBarcode: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var manualBarcode = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 18) {
+                #if targetEnvironment(simulator)
+                manualEntry
+                #else
+                if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+                    LiveBarcodeScanner(onBarcode: onBarcode)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .padding()
+                } else {
+                    manualEntry
+                }
+                #endif
+            }
+            .navigationTitle("Scan Barcode")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var manualEntry: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "barcode.viewfinder")
+                .font(.system(size: 64))
+                .foregroundStyle(.green)
+
+            TextField("Barcode number", text: $manualBarcode)
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+
+            Button("Look Up Product") {
+                onBarcode(manualBarcode)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(manualBarcode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(24)
+    }
+}
+
+private struct LiveBarcodeScanner: UIViewControllerRepresentable {
+    var onBarcode: (String) -> Void
+
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let scanner = DataScannerViewController(
+            recognizedDataTypes: [.barcode()],
+            qualityLevel: .balanced,
+            recognizesMultipleItems: false,
+            isHighFrameRateTrackingEnabled: false,
+            isPinchToZoomEnabled: true,
+            isGuidanceEnabled: true,
+            isHighlightingEnabled: true
+        )
+        scanner.delegate = context.coordinator
+        return scanner
+    }
+
+    func updateUIViewController(_ uiViewController: DataScannerViewController, context: Context) {
+        try? uiViewController.startScanning()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBarcode: onBarcode)
+    }
+
+    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        private var didScan = false
+        private let onBarcode: (String) -> Void
+
+        init(onBarcode: @escaping (String) -> Void) {
+            self.onBarcode = onBarcode
+        }
+
+        func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) {
+            handle(item)
+        }
+
+        func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
+            guard let item = addedItems.first else { return }
+            handle(item)
+        }
+
+        private func handle(_ item: RecognizedItem) {
+            guard !didScan else { return }
+            guard case .barcode(let barcode) = item,
+                  let payload = barcode.payloadStringValue,
+                  !payload.isEmpty else { return }
+
+            didScan = true
+            onBarcode(payload)
+        }
+    }
+}
+
+private struct BarcodeProductEntryView: View {
+    let product: BarcodeProduct
+    var onSave: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+
+    @State private var amountG: String
+
+    init(product: BarcodeProduct, onSave: @escaping () -> Void) {
+        self.product = product
+        self.onSave = onSave
+        _amountG = State(initialValue: format(product.defaultAmountG))
+    }
+
+    private var amount: Double {
+        max(Double(amountG) ?? product.defaultAmountG, 0)
+    }
+
+    private var multiplier: Double {
+        amount / 100
+    }
+
+    private var calories: Int {
+        Int((product.caloriesPer100G * multiplier).rounded())
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Product") {
+                    Text(product.displayName)
+                        .font(.headline)
+
+                    if !product.packageQuantity.isEmpty {
+                        LabeledContent("Package", value: product.packageQuantity)
+                    }
+
+                    if !product.servingSize.isEmpty {
+                        LabeledContent("Listed serving", value: product.servingSize)
+                    }
+
+                    LabeledContent("Barcode", value: product.barcode)
+                }
+
+                Section("Amount") {
+                    HStack {
+                        TextField("Amount", text: $amountG)
+                            .keyboardType(.decimalPad)
+                        Text("g or ml")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Nutrition For Amount") {
+                    LabeledContent("Calories", value: "\(calories) kcal")
+                    LabeledContent("Protein", value: "\(Int((product.proteinPer100G * multiplier).rounded())) g")
+                    LabeledContent("Carbs", value: "\(Int((product.carbsPer100G * multiplier).rounded())) g")
+                    LabeledContent("Fat", value: "\(Int((product.fatPer100G * multiplier).rounded())) g")
+                    LabeledContent("Fiber", value: "\(Int((product.fiberPer100G * multiplier).rounded())) g")
+                    LabeledContent("Sodium", value: "\(Int((product.sodiumPer100GMg * multiplier).rounded())) mg")
+                    LabeledContent("Potassium", value: "\(Int((product.potassiumPer100GMg * multiplier).rounded())) mg")
+                    LabeledContent("Phosphorus", value: "\(Int((product.phosphorusPer100GMg * multiplier).rounded())) mg")
+                }
+            }
+            .navigationTitle("Barcode Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .fontWeight(.bold)
+                        .disabled(amount <= 0)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let entry = FoodEntry(
+            foodName: product.displayName,
+            estimatedQuantity: "\(format(amount)) g/ml",
+            calories: calories,
+            proteinG: product.proteinPer100G * multiplier,
+            carbsG: product.carbsPer100G * multiplier,
+            fatG: product.fatPer100G * multiplier,
+            fiberG: product.fiberPer100G * multiplier,
+            sodiumMg: product.sodiumPer100GMg * multiplier,
+            potassiumMg: product.potassiumPer100GMg * multiplier,
+            phosphorusMg: product.phosphorusPer100GMg * multiplier,
+            notes: "Barcode: \(product.barcode)",
+            kidneyWarning: kidneyChecksEnabled ? barcodeKidneyWarning : "",
+            confidence: "barcode",
+            aiNotes: "Nutrition data from Open Food Facts. Review label values before relying on totals.",
+            imageData: nil
+        )
+
+        modelContext.insert(entry)
+        Task {
+            try? await healthKitManager.save(entry: entry)
+        }
+        onSave()
+    }
+
+    private var barcodeKidneyWarning: String {
+        var warnings: [String] = []
+
+        if product.sodiumPer100GMg * multiplier >= 700 {
+            warnings.append("High sodium for this amount.")
+        }
+
+        if product.potassiumPer100GMg * multiplier >= 700 {
+            warnings.append("High potassium for this amount.")
+        }
+
+        if product.phosphorusPer100GMg * multiplier >= 300 {
+            warnings.append("High phosphorus for this amount.")
+        }
+
+        return warnings.joined(separator: " ")
+    }
+}
+
+private enum BarcodeLookupService {
+    static func lookup(barcode: String) async throws -> BarcodeProduct {
+        var components = URLComponents(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json")
+        components?.queryItems = [
+            URLQueryItem(
+                name: "fields",
+                value: "code,product_name,brands,quantity,serving_size,serving_quantity,nutriments"
+            )
+        ]
+
+        guard let url = components?.url else {
+            throw BarcodeLookupError.invalidBarcode
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("MealVue/1.0 (nutrition logging app)", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw BarcodeLookupError.lookupFailed
+        }
+
+        let decoded = try JSONDecoder().decode(OpenFoodFactsResponse.self, from: data)
+        guard decoded.status == 1, let product = decoded.product else {
+            throw BarcodeLookupError.notFound
+        }
+
+        return BarcodeProduct(
+            barcode: decoded.code ?? barcode,
+            name: product.productName?.isEmpty == false ? product.productName! : "Scanned product",
+            brand: product.brands ?? "",
+            packageQuantity: product.quantity ?? "",
+            servingSize: product.servingSize ?? "",
+            servingQuantityG: product.servingQuantity,
+            caloriesPer100G: product.nutriments.energyKcal100G ?? product.nutriments.energyKcal ?? 0,
+            proteinPer100G: product.nutriments.protein100G ?? 0,
+            carbsPer100G: product.nutriments.carbohydrates100G ?? 0,
+            fatPer100G: product.nutriments.fat100G ?? 0,
+            fiberPer100G: product.nutriments.fiber100G ?? 0,
+            sodiumPer100GMg: (product.nutriments.sodium100G ?? 0) * 1000,
+            potassiumPer100GMg: (product.nutriments.potassium100G ?? 0) * 1000,
+            phosphorusPer100GMg: (product.nutriments.phosphorus100G ?? 0) * 1000
+        )
+    }
+}
+
+private struct OpenFoodFactsResponse: Decodable {
+    let code: String?
+    let status: Int
+    let product: Product?
+
+    struct Product: Decodable {
+        let productName: String?
+        let brands: String?
+        let quantity: String?
+        let servingSize: String?
+        let servingQuantity: Double?
+        let nutriments: Nutriments
+
+        enum CodingKeys: String, CodingKey {
+            case productName = "product_name"
+            case brands
+            case quantity
+            case servingSize = "serving_size"
+            case servingQuantity = "serving_quantity"
+            case nutriments
+        }
+    }
+
+    struct Nutriments: Decodable {
+        let energyKcal100G: Double?
+        let energyKcal: Double?
+        let protein100G: Double?
+        let carbohydrates100G: Double?
+        let fat100G: Double?
+        let fiber100G: Double?
+        let sodium100G: Double?
+        let potassium100G: Double?
+        let phosphorus100G: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case energyKcal100G = "energy-kcal_100g"
+            case energyKcal = "energy-kcal"
+            case protein100G = "proteins_100g"
+            case carbohydrates100G = "carbohydrates_100g"
+            case fat100G = "fat_100g"
+            case fiber100G = "fiber_100g"
+            case sodium100G = "sodium_100g"
+            case potassium100G = "potassium_100g"
+            case phosphorus100G = "phosphorus_100g"
+        }
+    }
+}
+
+private enum BarcodeLookupError: LocalizedError {
+    case invalidBarcode
+    case lookupFailed
+    case notFound
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidBarcode:
+            return "The scanned barcode was not valid."
+        case .lookupFailed:
+            return "Could not look up this barcode. Check the connection and try again."
+        case .notFound:
+            return "No product was found for this barcode."
         }
     }
 }
@@ -2192,7 +3007,6 @@ private struct TotalsCard: View {
     @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
 
     let totals: NutritionTotals
-    var trendEntries: [FoodEntry] = []
 
     private var sodiumThreshold: Double {
         parsedTarget(sodiumTargetMg) ?? RecommendedTargets.defaultSodiumMg(heartChecksEnabled: heartChecksEnabled)
@@ -2217,139 +3031,59 @@ private struct TotalsCard: View {
         CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
     }
 
-    private var dashboardItems: [DashboardRingItem] {
-        [
-            DashboardRingItem(
-                title: "Protein",
-                value: totals.proteinG,
-                target: proteinThreshold,
-                displayValue: "\(Int(totals.proteinG.rounded())) g",
-                targetLabel: "Target \(Int(proteinThreshold.rounded())) g",
-                accent: .blue
-            ),
-            DashboardRingItem(
-                title: "Sodium",
-                value: totals.sodiumMg,
-                target: sodiumThreshold,
-                displayValue: "\(Int(totals.sodiumMg.rounded())) mg",
-                targetLabel: "Target \(Int(sodiumThreshold.rounded())) mg",
-                accent: .orange
-            ),
-            DashboardRingItem(
-                title: "Potassium",
-                value: totals.potassiumMg,
-                target: potassiumThreshold ?? 3000,
-                displayValue: "\(Int(totals.potassiumMg.rounded())) mg",
-                targetLabel: "Target \(Int((potassiumThreshold ?? 3000).rounded())) mg",
-                accent: .yellow
-            ),
-            DashboardRingItem(
-                title: "Phosphorus",
-                value: totals.phosphorusMg,
-                target: phosphorusThreshold ?? 1000,
-                displayValue: "\(Int(totals.phosphorusMg.rounded())) mg",
-                targetLabel: "Target \(Int((phosphorusThreshold ?? 1000).rounded())) mg",
-                accent: .purple
-            )
-        ]
-    }
-
-    private var sparklineItems: [DashboardSparklineItem] {
-        let lastSevenDays = sevenDaySections(from: trendEntries)
-
-        return [
-            DashboardSparklineItem(
-                title: "Protein",
-                values: lastSevenDays.map { $0.totals.proteinG },
-                target: proteinThreshold,
-                accent: .blue,
-                unit: "g"
-            ),
-            DashboardSparklineItem(
-                title: "Sodium",
-                values: lastSevenDays.map { $0.totals.sodiumMg },
-                target: sodiumThreshold,
-                accent: .orange,
-                unit: "mg"
-            ),
-            DashboardSparklineItem(
-                title: "Potassium",
-                values: lastSevenDays.map { $0.totals.potassiumMg },
-                target: potassiumThreshold ?? 3000,
-                accent: .yellow,
-                unit: "mg"
-            ),
-            DashboardSparklineItem(
-                title: "Phosphorus",
-                values: lastSevenDays.map { $0.totals.phosphorusMg },
-                target: phosphorusThreshold ?? 1000,
-                accent: .purple,
-                unit: "mg"
-            )
-        ]
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Today")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                    Text("\(totals.calories)")
-                        .font(.system(size: 46, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.primary)
-                    Text("kcal across \(totals.entriesCount) meals")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(totals.calories)")
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .foregroundStyle(.green)
+                Text("kcal")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
                 Spacer()
-
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(spacing: 8) {
-                        DashboardStatusDot(color: .green, label: "< 80%")
-                        DashboardStatusDot(color: .yellow, label: "80–100%")
-                        DashboardStatusDot(color: .red, label: "> 100%")
-                    }
-                    .font(.caption2)
-                }
+                Text("\(totals.entriesCount) meals")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
             }
 
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 2), spacing: 14) {
-                ForEach(dashboardItems) { item in
-                    NutrientRingCard(item: item)
-                }
+            HStack(spacing: 12) {
+                MacroSummaryCard(title: "Protein", value: totals.proteinG, tint: .blue)
+                MacroSummaryCard(title: "Carbs", value: totals.carbsG, tint: .green)
+                MacroSummaryCard(title: "Fat", value: totals.fatG, tint: .orange)
+                MacroSummaryCard(title: "Fiber", value: totals.fiberG, tint: .purple)
             }
+
+            ProteinTargetRow(value: totals.proteinG, threshold: proteinThreshold)
+
+            Divider()
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("7-Day Trends")
+                Text("Daily Mineral Totals")
                     .font(.headline)
 
-                ForEach(sparklineItems) { item in
-                    NutrientSparklineRow(item: item)
-                }
+                MineralTotalRow(
+                    title: "Sodium",
+                    value: totals.sodiumMg,
+                    threshold: sodiumThreshold,
+                    note: "Target \(Int(sodiumThreshold)) mg/day"
+                )
+
+                MineralTotalRow(
+                    title: "Potassium",
+                    value: totals.potassiumMg,
+                    threshold: potassiumThreshold,
+                    note: potassiumThreshold == nil ? "Tracking only" : "Target \(Int(potassiumThreshold ?? 0)) mg/day"
+                )
+
+                MineralTotalRow(
+                    title: "Phosphorus",
+                    value: totals.phosphorusMg,
+                    threshold: phosphorusThreshold,
+                    note: phosphorusThreshold == nil ? "Tracking only" : "Target \(Int(phosphorusThreshold ?? 0)) mg/day"
+                )
             }
         }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.96, green: 0.98, blue: 0.99),
-                            Color(red: 0.92, green: 0.96, blue: 0.94)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.white.opacity(0.75), lineWidth: 1)
-        )
+        .padding(.vertical, 8)
     }
 
     private func parsedTarget(_ text: String) -> Double? {
@@ -2357,16 +3091,168 @@ private struct TotalsCard: View {
         guard !trimmed.isEmpty else { return nil }
         return Double(trimmed)
     }
-    
-    private func sevenDaySections(from entries: [FoodEntry]) -> [HistorySection] {
-        let calendar = Calendar.current
-        let startOfToday = calendar.startOfDay(for: Date())
+}
 
-        return (0..<7).reversed().compactMap { offset in
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: startOfToday) else { return nil }
-            let dayEntries = entries.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }
-            return HistorySection(date: date, entries: dayEntries)
+private struct MacroSummaryCard: View {
+    let title: String
+    let value: Double
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("\(Int(value.rounded()))g")
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(tint)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct ProteinTargetRow: View {
+    let value: Double
+    let threshold: Double
+
+    private var progress: Double {
+        guard threshold > 0 else { return 0 }
+        return value / threshold
+    }
+
+    private var tint: Color {
+        switch progress {
+        case ..<0.8:
+            return .green
+        case ..<1.0:
+            return .yellow
+        default:
+            return .red
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Protein target")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(Int(value.rounded())) / \(Int(threshold.rounded())) g")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView(value: min(progress, 1.0))
+                .tint(tint)
+        }
+    }
+}
+
+private struct MineralTotalRow: View {
+    let title: String
+    let value: Double
+    let threshold: Double?
+    let note: String
+
+    private var isHigh: Bool {
+        guard let threshold else { return false }
+        return value > threshold
+    }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text("\(Int(value.rounded())) mg")
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .foregroundStyle(isHigh ? .red : .primary)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct BarGraphView: View {
+    let totals: NutritionTotals
+    let title: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+
+            Chart {
+                BarMark(
+                    x: .value("Nutrient", "Protein"),
+                    y: .value("Amount", totals.proteinG)
+                )
+                .foregroundStyle(.blue)
+
+                BarMark(
+                    x: .value("Nutrient", "Fiber"),
+                    y: .value("Amount", totals.fiberG)
+                )
+                .foregroundStyle(.green)
+
+                BarMark(
+                    x: .value("Nutrient", "Sodium"),
+                    y: .value("Amount", totals.sodiumMg / 1000)
+                )
+                .foregroundStyle(.orange)
+
+                BarMark(
+                    x: .value("Nutrient", "Potassium"),
+                    y: .value("Amount", totals.potassiumMg / 1000)
+                )
+                .foregroundStyle(.yellow)
+
+                BarMark(
+                    x: .value("Nutrient", "Phosphorus"),
+                    y: .value("Amount", totals.phosphorusMg / 1000)
+                )
+                .foregroundStyle(.purple)
+            }
+            .frame(height: 200)
+            .chartYAxis {
+                AxisMarks { value in
+                    AxisValueLabel("\(value.as(Double.self) ?? 0, specifier: "%.1f")")
+                }
+            }
+
+            HStack {
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Protein: \(Int(totals.proteinG.rounded()))g")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    Text("Fiber: \(Int(totals.fiberG.rounded()))g")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    Text("Sodium: \(Int(totals.sodiumMg.rounded()))mg")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Text("Potassium: \(Int(totals.potassiumMg.rounded()))mg")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                    Text("Phosphorus: \(Int(totals.phosphorusMg.rounded()))mg")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -2989,7 +3875,26 @@ private enum AIProvider: String, CaseIterable, Identifiable {
     }
 }
 
-private struct GeminiModel: Identifiable, Hashable {
+private protocol RankedAIModel {
+    var id: String { get }
+}
+
+private struct AnthropicModel: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+
+    static let defaults: [AnthropicModel] = [
+        AnthropicModel(id: "claude-opus-4-5", displayName: "Claude Opus 4.5"),
+        AnthropicModel(id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6"),
+        AnthropicModel(id: "claude-sonnet-4-5", displayName: "Claude Sonnet 4.5"),
+        AnthropicModel(id: "claude-haiku-4-5", displayName: "Claude Haiku 4.5"),
+        AnthropicModel(id: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4")
+    ]
+
+    static let defaultModel = defaults[0]
+}
+
+private struct GeminiModel: Identifiable, Hashable, RankedAIModel {
     let id: String
     let displayName: String
 
@@ -3000,22 +3905,55 @@ private struct GeminiModel: Identifiable, Hashable {
     ]
 
     static let defaultModel = defaults[0]
+
+    static func isVisionCapableID(_ id: String) -> Bool {
+        let normalized = id.lowercased()
+        return normalized.contains("flash") ||
+            normalized.contains("pro") ||
+            normalized.contains("vision")
+    }
+
+    static func shouldResetSelection(_ id: String) -> Bool {
+        let normalized = id.lowercased()
+        return normalized.contains("preview") ||
+            normalized.contains("experimental") ||
+            !isVisionCapableID(normalized)
+    }
 }
 
-private struct OpenAIModel: Identifiable, Hashable {
+private struct OpenAIModel: Identifiable, Hashable, RankedAIModel {
     let id: String
     let displayName: String
 
     static let defaults: [OpenAIModel] = [
+        OpenAIModel(id: "gpt-4.1", displayName: "GPT-4.1"),
+        OpenAIModel(id: "gpt-4o", displayName: "GPT-4o"),
         OpenAIModel(id: "gpt-4.1-mini", displayName: "GPT-4.1 Mini"),
         OpenAIModel(id: "gpt-4o-mini", displayName: "GPT-4o Mini"),
-        OpenAIModel(id: "gpt-4.1", displayName: "GPT-4.1")
+        OpenAIModel(id: "gpt-5.5", displayName: "GPT-5.5"),
+        OpenAIModel(id: "gpt-5.4", displayName: "GPT-5.4")
     ]
 
     static let defaultModel = defaults[0]
+
+    static func isVisionCapableID(_ id: String) -> Bool {
+        let normalized = id.lowercased()
+        guard !normalized.contains("realtime"),
+              !normalized.contains("audio"),
+              !normalized.contains("image"),
+              !normalized.contains("embedding"),
+              !normalized.contains("moderation"),
+              !normalized.contains("search-preview") else {
+            return false
+        }
+
+        return normalized.hasPrefix("gpt-5") ||
+            normalized.hasPrefix("gpt-4.1") ||
+            normalized.hasPrefix("gpt-4o")
+    }
 }
 
-private struct OpenRouterModel: Identifiable, Hashable {
+private struct OpenRouterModel: Identifiable, Hashable, RankedAIModel {
     let id: String
     let displayName: String
     let supportsVision: Bool
@@ -3034,6 +3972,31 @@ private struct OpenRouterModel: Identifiable, Hashable {
         supportsVision: true,
         isRouter: true
     )
+
+    static let recommended: [OpenRouterModel] = [
+        .autoRouter,
+        OpenRouterModel(id: "anthropic/claude-opus-4.5", displayName: "Claude Opus 4.5", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "anthropic/claude-sonnet-4.6", displayName: "Claude Sonnet 4.6", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "anthropic/claude-sonnet-4.5", displayName: "Claude Sonnet 4.5", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "google/gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash-Lite", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "google/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "openai/gpt-5.5", displayName: "GPT-5.5", supportsVision: true, isRouter: false),
+        .freeRouter
+    ]
+}
+
+private func rankModels<T: RankedAIModel>(_ models: [T], preferredIDs: [String]) -> [T] {
+    models.sorted { lhs, rhs in
+        let leftRank = preferredIDs.firstIndex(of: lhs.id) ?? Int.max
+        let rightRank = preferredIDs.firstIndex(of: rhs.id) ?? Int.max
+
+        if leftRank != rightRank {
+            return leftRank < rightRank
+        }
+
+        return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+    }
 }
 
 private enum AnalysisPhase: Equatable {
@@ -3075,13 +4038,18 @@ private enum Config {
         defaults.string(forKey: "anthropicAPIKey") ?? ""
     }
 
+    static var anthropicModelID: String {
+        let saved = defaults.string(forKey: "anthropicModelID") ?? ""
+        return saved.isEmpty ? AnthropicModel.defaultModel.id : saved
+    }
+
     static var geminiAPIKey: String {
         defaults.string(forKey: "geminiAPIKey") ?? ""
     }
 
     static var geminiModelID: String {
         let saved = defaults.string(forKey: "geminiModelID") ?? ""
-        return saved.isEmpty ? GeminiModel.defaultModel.id : saved
+        return saved.isEmpty || GeminiModel.shouldResetSelection(saved) ? GeminiModel.defaultModel.id : saved
     }
 
     static var openAIAPIKey: String {
@@ -3126,7 +4094,6 @@ private enum Config {
 
 private enum ClaudeService {
     private static let anthropicURL = URL(string: "https://api.anthropic.com/v1/messages")!
-    private static let anthropicModel = "claude-sonnet-4-20250514"
     private static let anthropicVersion = "2023-06-01"
     private static let geminiModelsURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
     private static let openAIURL = URL(string: "https://api.openai.com/v1/chat/completions")!
@@ -3214,12 +4181,12 @@ private enum ClaudeService {
 
         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
 
+        let preferredIDs = OpenRouterModel.recommended.map(\.id)
         let modelsFromAPI = decoded.data.filter { model in
             let outputs = model.architecture?.output_modalities ?? ["text"]
             guard outputs.contains("text") else { return false }
             return true
         }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         .map { model in
             let inputs = model.architecture?.input_modalities ?? []
             let supportsVision = inputs.contains("image")
@@ -3230,10 +4197,33 @@ private enum ClaudeService {
                 isRouter: false
             )
         }
+        .sorted { sortOpenRouterModels($0, $1, preferredIDs: preferredIDs) }
 
-        var models = [OpenRouterModel.autoRouter, OpenRouterModel.freeRouter]
+        var models = OpenRouterModel.recommended
         models.append(contentsOf: modelsFromAPI)
-        return Array(NSOrderedSet(array: models).compactMap { $0 as? OpenRouterModel })
+        var seen = Set<String>()
+        return models
+            .filter { model in
+                guard !seen.contains(model.id) else { return false }
+                seen.insert(model.id)
+                return true
+            }
+            .sorted { sortOpenRouterModels($0, $1, preferredIDs: preferredIDs) }
+    }
+
+    private static func sortOpenRouterModels(_ lhs: OpenRouterModel, _ rhs: OpenRouterModel, preferredIDs: [String]) -> Bool {
+        let leftRank = preferredIDs.firstIndex(of: lhs.id) ?? Int.max
+        let rightRank = preferredIDs.firstIndex(of: rhs.id) ?? Int.max
+
+        if leftRank != rightRank {
+            return leftRank < rightRank
+        }
+
+        if lhs.supportsVision != rhs.supportsVision {
+            return lhs.supportsVision
+        }
+
+        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
     }
 
     static func fetchGeminiModels(apiKey: String) async throws -> [GeminiModel] {
@@ -3280,12 +4270,9 @@ private enum ClaudeService {
             .filter { model in
                 let methods = model.supportedGenerationMethods ?? []
                 let id = model.name.replacingOccurrences(of: "models/", with: "")
-                let isImageCapableName =
-                    id.contains("flash") ||
-                    id.contains("pro") ||
-                    id.contains("vision")
-
-                return methods.contains("generateContent") && isImageCapableName
+                return methods.contains("generateContent") &&
+                    GeminiModel.isVisionCapableID(id) &&
+                    !GeminiModel.shouldResetSelection(id)
             }
             .map { model in
                 let id = model.name.replacingOccurrences(of: "models/", with: "")
@@ -3294,11 +4281,8 @@ private enum ClaudeService {
                     displayName: model.displayName?.isEmpty == false ? model.displayName! : id
                 )
             }
-            .sorted { (lhs: GeminiModel, rhs: GeminiModel) in
-                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-            }
-
-        return models
+        let preferredIDs = GeminiModel.defaults.map(\.id)
+        return rankModels(models, preferredIDs: preferredIDs)
     }
 
     static func fetchOpenAIModels(apiKey: String) async throws -> [OpenAIModel] {
@@ -3343,6 +4327,9 @@ private enum ClaudeService {
         ]
 
         let preferredPrefixes = [
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5",
             "gpt-4.1",
             "gpt-4o"
         ]
@@ -3350,13 +4337,22 @@ private enum ClaudeService {
         return decoded.data
             .filter { model in
                 preferredPrefixes.contains { model.id.hasPrefix($0) } &&
-                !blockedPrefixes.contains { model.id.hasPrefix($0) }
+                !blockedPrefixes.contains { model.id.hasPrefix($0) } &&
+                OpenAIModel.isVisionCapableID(model.id)
             }
             .map { model in
                 OpenAIModel(id: model.id, displayName: model.id)
             }
-            .sorted { (lhs: OpenAIModel, rhs: OpenAIModel) in
-                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            .sorted { lhs, rhs in
+                let preferredIDs = OpenAIModel.defaults.map(\.id)
+                let leftRank = preferredIDs.firstIndex(of: lhs.id) ?? Int.max
+                let rightRank = preferredIDs.firstIndex(of: rhs.id) ?? Int.max
+
+                if leftRank != rightRank {
+                    return leftRank < rightRank
+                }
+
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
             }
     }
 
@@ -3367,7 +4363,7 @@ private enum ClaudeService {
         }
 
         let body: [String: Any] = [
-            "model": anthropicModel,
+            "model": Config.anthropicModelID,
             "max_tokens": 512,
             "messages": [[
                 "role": "user",
@@ -3388,14 +4384,14 @@ private enum ClaudeService {
             ]]
         ]
 
-        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
+        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: Config.anthropicModelID)
     }
 
     private static func analyzeTextWithAnthropic(description: String) async throws -> NutritionResult {
         let prompt = textNutritionPrompt(for: description)
 
         let body: [String: Any] = [
-            "model": anthropicModel,
+            "model": Config.anthropicModelID,
             "max_tokens": 512,
             "messages": [[
                 "role": "user",
@@ -3403,7 +4399,7 @@ private enum ClaudeService {
             ]]
         ]
 
-        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
+        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: Config.anthropicModelID)
     }
 
     private static func analyzeFoodWithAnthropic(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
@@ -3413,7 +4409,7 @@ private enum ClaudeService {
         }
 
         let body: [String: Any] = [
-            "model": anthropicModel,
+            "model": Config.anthropicModelID,
             "max_tokens": 512,
             "messages": [[
                 "role": "user",
@@ -3434,12 +4430,12 @@ private enum ClaudeService {
             ]]
         ]
 
-        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: anthropicModel)
+        return try await requestAnthropicResult(body: body, providerName: AIProvider.anthropic.displayName, modelUsed: Config.anthropicModelID)
     }
 
     private static func analyzeFoodWithGemini(image: UIImage) async throws -> NutritionResult {
-        let resized = resize(image, maxDimension: 1024)
-        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+        let resized = resize(image, maxDimension: 960)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.55) else {
             throw ClaudeError.imageEncodingFailed
         }
 
@@ -3479,8 +4475,8 @@ private enum ClaudeService {
     }
 
     private static func analyzeFoodWithGemini(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
-        let resized = resize(image, maxDimension: 1024)
-        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+        let resized = resize(image, maxDimension: 960)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.55) else {
             throw ClaudeError.imageEncodingFailed
         }
 
@@ -3707,19 +4703,28 @@ private enum ClaudeService {
             throw ClaudeError.missingAPIKey
         }
 
-        guard let model = Config.geminiModelID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+        guard let model = modelUsed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
             throw ClaudeError.parseError
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        request.timeoutInterval = 35
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(Config.geminiAPIKey, forHTTPHeaderField: "x-goog-api-key")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            if (error as NSError).code == NSURLErrorTimedOut {
+                throw ClaudeError.apiError(NSURLErrorTimedOut, "Google Gemini timed out. Try Gemini 2.5 Flash or Flash-Lite, check the API key quota, or switch providers temporarily.")
+            }
+            throw error
+        }
 
         guard let http = response as? HTTPURLResponse else {
             throw ClaudeError.networkError
@@ -3938,7 +4943,8 @@ private enum ClaudeService {
 
     private static var geminiJSONGenerationConfig: [String: Any] {
         [
-            "response_mime_type": "application/json"
+            "response_mime_type": "application/json",
+            "max_output_tokens": 700
         ]
     }
 
@@ -4232,6 +5238,9 @@ private enum ClaudeError: LocalizedError {
         case .networkError:
             return "Network error."
         case .apiError(let code, let body):
+            if code == NSURLErrorTimedOut {
+                return body
+            }
             if code == 404 {
                 return "API error 404. The selected model or endpoint was not found for the current provider."
             }
@@ -4438,15 +5447,15 @@ private struct ImagePicker: UIViewControllerRepresentable {
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let image = info[.originalImage] as? UIImage {
-                parent.onImage(image)
+            let image = info[.originalImage] as? UIImage
+            picker.dismiss(animated: true) {
+                guard let image else { return }
+                self.parent.onImage(image)
             }
-
-            parent.dismiss()
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            parent.dismiss()
+            picker.dismiss(animated: true)
         }
     }
 }

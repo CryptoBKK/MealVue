@@ -31,6 +31,7 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
   - nutrition trend reads
   - kidney lab record reads when Health Records are available
 - Apple Health delete-sync for newly exported meals
+- iCloud/CloudKit sync for meal data across devices on the same Apple account
 - Food and medication reference guidance
 
 ## Setup
@@ -61,6 +62,11 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
 10. For Apple Health testing on a real device:
    - use a paid Apple Developer account with HealthKit capability enabled for the App ID
    - Personal Team signing is not sufficient for HealthKit / Clinical Health Records device builds
+11. For iCloud sync on real devices:
+   - enable `iCloud` and `CloudKit` for the App ID
+   - use the container `iCloud.com.mealvue.app`
+   - install the app on devices signed with the same approved developer team
+   - sign into the same iCloud account on each device
 
 ## Notes
 
@@ -72,4 +78,5 @@ MealVue is an iOS SwiftUI app for meal logging with optional AI analysis and bui
 - Sodium, potassium, phosphorus, and protein targets can be manually overridden in `Settings`.
 - Fiber is tracked in meal totals, Apple Health summaries, and 7-day trends, but it does not currently use a warning threshold target.
 - Apple Health delete-sync applies to meals exported by current builds that include MealVue Health metadata.
+- iCloud sync is implemented with SwiftData + CloudKit private database. First sync can take time and requires a valid iCloud account, network access, and approved CloudKit entitlements.
 - CKD defaults are stage-aware, but they are still reference targets and should not replace clinician guidance or lab-based diet planning.

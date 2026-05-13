@@ -11,22 +11,22 @@ import UIKit
 
 @Model
 class FoodEntry {
-    var entryId: UUID
-    var timestamp: Date
-    var foodName: String
-    var estimatedQuantity: String
-    var calories: Int
-    var proteinG: Double
-    var carbsG: Double
-    var fatG: Double
-    var fiberG: Double
-    var sodiumMg: Double
-    var potassiumMg: Double
-    var phosphorusMg: Double
-    var notes: String
-    var kidneyWarning: String
-    var confidence: String
-    var aiNotes: String
+    var entryId: UUID = UUID()
+    var timestamp: Date = Date()
+    var foodName: String = ""
+    var estimatedQuantity: String = ""
+    var calories: Int = 0
+    var proteinG: Double = 0
+    var carbsG: Double = 0
+    var fatG: Double = 0
+    var fiberG: Double = 0
+    var sodiumMg: Double = 0
+    var potassiumMg: Double = 0
+    var phosphorusMg: Double = 0
+    var notes: String = ""
+    var kidneyWarning: String = ""
+    var confidence: String = "manual"
+    var aiNotes: String = ""
     @Attribute(.externalStorage) var imageData: Data?
 
     init(

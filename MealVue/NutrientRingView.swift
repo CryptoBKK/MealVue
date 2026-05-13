@@ -8,29 +8,34 @@ import SwiftUI
 struct NutrientRingView: View {
     let title: String
     let current: Double
-    let target: Double
+    let target: Double?
     let unit: String
     let color: Color
     var size: CGFloat = 120
     
     private var progress: Double {
-        guard target > 0 else { return 0 }
-        return min(current / target, 1.5) // Cap visual at 150% for overflow indication
+        guard let target, target > 0 else { return 0 }
+        return min(current / target, 1.5)
     }
     
     private var statusColor: Color {
+        guard let target, target > 0 else {
+            return color
+        }
+
         let percentage = current / target
-        if percentage >= 1.0 {
+        if percentage > 1.0 {
             return .red
         } else if percentage >= 0.8 {
             return .yellow
         } else {
-            return color
+            return .green
         }
     }
     
     private var isOverTarget: Bool {
-        current > target
+        guard let target else { return false }
+        return current > target
     }
     
     var body: some View {
@@ -55,7 +60,7 @@ struct NutrientRingView: View {
                         .font(.system(size: size * 0.18, weight: .bold))
                         .foregroundColor(isOverTarget ? .red : .primary)
                     
-                    Text(unit)
+                    Text(target == nil ? "tracking" : unit)
                         .font(.system(size: size * 0.1))
                         .foregroundColor(.secondary)
                     
@@ -77,12 +82,14 @@ struct NutrientRingView: View {
 struct NutrientRingsView: View {
     let proteinG: Double
     let proteinTarget: Double
+    let fiberG: Double
+    let fiberTarget: Double?
     let sodiumMg: Double
     let sodiumTarget: Double
     let potassiumMg: Double
-    let potassiumTarget: Double
+    let potassiumTarget: Double?
     let phosphorusMg: Double
-    let phosphorusTarget: Double
+    let phosphorusTarget: Double?
     
     var body: some View {
         LazyVGrid(columns: [
@@ -95,6 +102,15 @@ struct NutrientRingsView: View {
                 target: proteinTarget,
                 unit: "g",
                 color: .blue,
+                size: 110
+            )
+
+            NutrientRingView(
+                title: "Fiber",
+                current: fiberG,
+                target: fiberTarget,
+                unit: "g",
+                color: .green,
                 size: 110
             )
             
@@ -134,6 +150,8 @@ struct NutrientRingsView: View {
         NutrientRingsView(
             proteinG: 65,
             proteinTarget: 80,
+            fiberG: 25,
+            fiberTarget: 30,
             sodiumMg: 1800,
             sodiumTarget: 2000,
             potassiumMg: 2500,

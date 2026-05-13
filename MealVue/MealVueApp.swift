@@ -53,7 +53,7 @@ struct MealVueApp: App {
             "MealVue",
             schema: schema,
             url: storeURL,
-            cloudKitDatabase: .none
+            cloudKitDatabase: .private("iCloud.com.mealvue.app")
         )
 
         do {
@@ -160,7 +160,7 @@ private struct LaunchView: View {
                     Text("MealVue")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
 
-                    Text("Loading your meals and health guide...")
+                    Text("Loading your meals, iCloud sync, and health guide...")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

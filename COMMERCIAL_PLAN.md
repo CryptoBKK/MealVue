@@ -38,6 +38,9 @@
 - [ ] Read mock data in simulator: eGFR, creatinine, potassium levels
 - [ ] Write logged nutrients back to Health app
 - [ ] Add "Health Trends" tab: correlate diet changes with lab improvements
+- [x] Add SwiftData + CloudKit private database sync for meal data backup and same-account device sync
+- [ ] Enable iCloud/CloudKit in Apple Developer portal for `iCloud.com.mealvue.app` after developer approval
+- [ ] Validate iCloud sync on two real devices signed with the approved developer team
 
 ### 2.2 Improved Dashboard UI (Commercial-Grade Design)
 - [ ] Replace basic list with card-based design
