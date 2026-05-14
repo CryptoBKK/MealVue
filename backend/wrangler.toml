@@ -1,0 +1,26 @@
+name = "mealvue-ai-backend"
+main = "src/index.ts"
+compatibility_date = "2026-05-14"
+
+[vars]
+DEFAULT_PROVIDER = "cloudflare"
+CLOUDFLARE_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
+GEMINI_MODEL = "gemini-2.5-flash"
+OPENROUTER_MODEL = "openrouter/free"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "USAGE_COUNTER"
+class_name = "UsageCounterObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UsageCounterObject"]
+
+# Set secrets with:
+# wrangler secret put GEMINI_API_KEY
+# wrangler secret put OPENROUTER_API_KEY
+# wrangler secret put MEALVUE_CLIENT_TOKEN
+# wrangler secret put ADMIN_TOKEN
