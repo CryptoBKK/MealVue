@@ -5,6 +5,7 @@ type Env = {
   CLOUDFLARE_IMAGE_MODEL_TRIAL_REQUESTS?: string;
   AI?: AiBinding;
   GEMINI_MODEL?: string;
+  GEMINI_FALLBACK_MODEL?: string;
   GEMINI_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_API_KEY?: string;
@@ -175,45 +176,105 @@ export default {
       }
 
       const startedAt = Date.now();
-      const provider = body.provider ?? (env.DEFAULT_PROVIDER as AnalyzeRequest["provider"]) ?? "cloudflare";
-      const model = await modelForRequest(provider, body, env);
+      const requestedProvider = body.provider ?? (env.DEFAULT_PROVIDER as AnalyzeRequest["provider"]) ?? "cloudflare";
+      const model = await modelForRequest(requestedProvider, body, env);
 
-      try {
-        const result = await analyzeWithProvider(provider, body, env, model);
+      // Build fallback chain: requested provider → gemini-flash-lite → gemini-flash → openrouter
+      const fallbackChain = buildFallbackChain(requestedProvider, body, env, model);
 
-        ctx.waitUntil(recordUsage(env, {
-          timestamp: new Date().toISOString(),
-          provider,
-          model,
-          mode: body.mode || "text",
-          status: "success",
-          durationMs: Date.now() - startedAt,
-          ...result.usage
-        }));
+      for (let i = 0; i < fallbackChain.length; i++) {
+        const { provider: fbProvider, model: fbModel } = fallbackChain[i];
+        try {
+          const result = await analyzeWithProvider(fbProvider, body, env, fbModel);
 
-        return json(result.payload);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "AI analysis failed.";
-        ctx.waitUntil(recordUsage(env, {
-          timestamp: new Date().toISOString(),
-          provider,
-          model,
-          mode: body.mode || "text",
-          status: "error",
-          durationMs: Date.now() - startedAt,
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          estimatedCostUsd: 0,
-          error: message
-        }));
-        return json({ error: message }, 502);
+          ctx.waitUntil(recordUsage(env, {
+            timestamp: new Date().toISOString(),
+            provider: fbProvider,
+            model: fbModel,
+            mode: body.mode || "text",
+            status: "success",
+            durationMs: Date.now() - startedAt,
+            ...result.usage
+          }));
+
+          // If we fell back from the requested provider, include that info
+          if (i > 0) {
+            return json({
+              ...result.payload as object,
+              _meta: {
+                fallback: true,
+                requestedProvider,
+                actualProvider: fbProvider,
+                actualModel: fbModel
+              }
+            });
+          }
+
+          return json(result.payload);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "AI analysis failed.";
+          ctx.waitUntil(recordUsage(env, {
+            timestamp: new Date().toISOString(),
+            provider: fbProvider,
+            model: fbModel,
+            mode: body.mode || "text",
+            status: "error",
+            durationMs: Date.now() - startedAt,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            error: message
+          }));
+
+          // If this was the last fallback, return the error
+          if (i === fallbackChain.length - 1) {
+            return json({ error: message }, 502);
+          }
+          // Otherwise continue to next fallback
+        }
       }
+
+      return json({ error: "All AI providers failed." }, 502);
     }
 
     return json({ error: "Not found." }, 404);
   }
 };
+
+type FallbackEntry = { provider: AnalyzeRequest["provider"]; model: string };
+
+function buildFallbackChain(
+  requestedProvider: AnalyzeRequest["provider"],
+  body: AnalyzeRequest,
+  env: Env,
+  model: string
+): FallbackEntry[] {
+  const chain: FallbackEntry[] = [];
+
+  // Always try the requested provider first
+  chain.push({ provider: requestedProvider, model });
+
+  // If the requested provider is not already Gemini Flash-Lite, add it as fallback
+  const flashLiteModel = env.GEMINI_FALLBACK_MODEL || "gemini-2.5-flash-lite";
+  if (requestedProvider !== "gemini" || model !== flashLiteModel) {
+    chain.push({ provider: "gemini", model: flashLiteModel });
+  }
+
+  // If the requested provider is not already Gemini Flash, add it as fallback
+  const flashModel = env.GEMINI_MODEL || "gemini-2.5-flash";
+  if (requestedProvider !== "gemini" || model !== flashModel) {
+    chain.push({ provider: "gemini", model: flashModel });
+  }
+
+  // If the requested provider is not already OpenRouter, add it as last resort
+  const orModel = env.OPENROUTER_MODEL || "openrouter/free";
+  if (requestedProvider !== "openrouter") {
+    chain.push({ provider: "openrouter", model: orModel });
+  }
+
+  return chain;
+}
 
 function authorizeAdmin(request: Request, env: Env): Response | null {
   const token = env.ADMIN_TOKEN || env.MEALVUE_CLIENT_TOKEN;
