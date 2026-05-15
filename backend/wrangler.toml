@@ -4,14 +4,10 @@ compatibility_date = "2026-05-14"
 
 [vars]
 DEFAULT_PROVIDER = "cloudflare"
-CLOUDFLARE_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
-# 5 vision model candidates for food image analysis, ordered by preference:
-# 1. llama-4-scout-17b-16e-instruct - Best accuracy, 17B multimodal, good food understanding
-# 2. gemma-3-12b-it - Strong multimodal, 128K context, 140+ languages (Thai food support)
-# 3. llama-3.2-11b-vision-instruct - Current default, decent vision, cheaper
-# 4. mistral-small-3.1-24b-instruct - Good quality, moderate cost
-# 5. gemma-4-26b-a4b-it - Newest Google model, efficient, vision + tool calling
-CLOUDFLARE_IMAGE_MODELS = "@cf/meta/llama-4-scout-17b-16e-instruct,@cf/google/gemma-3-12b-it,@cf/meta/llama-3.2-11b-vision-instruct,@cf/mistralai/mistral-small-3.1-24b-instruct,@cf/google/gemma-4-26b-a4b-it"
+# Primary vision model: llama-4-scout is the most capable Cloudflare vision model (17B, multimodal)
+CLOUDFLARE_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
+# Fallback vision models for food image analysis (ordered by preference)
+CLOUDFLARE_IMAGE_MODELS = "@cf/meta/llama-4-scout-17b-16e-instruct,@cf/google/gemma-4-26b-a4b-it,@cf/google/gemma-3-12b-it,@cf/mistralai/mistral-small-3.1-24b-instruct"
 CLOUDFLARE_IMAGE_MODEL_TRIAL_REQUESTS = "10"
 GEMINI_MODEL = "gemini-2.5-flash"
 OPENROUTER_MODEL = "openrouter/free"

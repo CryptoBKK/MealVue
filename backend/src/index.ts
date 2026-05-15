@@ -542,7 +542,7 @@ function providerError(provider: string, status: number, body: string): string {
 }
 
 function modelForProvider(provider: AnalyzeRequest["provider"], env: Env): string {
-  if (provider === "cloudflare") return env.CLOUDFLARE_MODEL || "@cf/meta/llama-3.2-11b-vision-instruct";
+  if (provider === "cloudflare") return env.CLOUDFLARE_MODEL || "@cf/meta/llama-4-scout-17b-16e-instruct";
   if (provider === "openrouter") return env.OPENROUTER_MODEL || "openrouter/free";
   return env.GEMINI_MODEL || "gemini-2.5-flash";
 }
@@ -567,8 +567,8 @@ function cloudflareImageModels(env: Env): string[] {
   if (configured.length > 0) return configured;
 
   return [
-    env.CLOUDFLARE_MODEL || "@cf/meta/llama-3.2-11b-vision-instruct",
-    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    env.CLOUDFLARE_MODEL || "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/google/gemma-4-26b-a4b-it",
     "@cf/google/gemma-3-12b-it",
     "@cf/mistralai/mistral-small-3.1-24b-instruct"
   ];
@@ -637,18 +637,17 @@ function estimateTokens(text: string): number {
 }
 
 const pricingUsdPerMillionTokens: Record<string, { input: number; output: number }> = {
-  "cloudflare:@cf/meta/llama-3.2-11b-vision-instruct": { input: 0.049, output: 0.676 },
   "cloudflare:@cf/meta/llama-4-scout-17b-16e-instruct": { input: 0.270, output: 0.850 },
+  "cloudflare:@cf/google/gemma-4-26b-a4b-it": { input: 0.100, output: 0.300 },
   "cloudflare:@cf/google/gemma-3-12b-it": { input: 0.345, output: 0.556 },
   "cloudflare:@cf/mistralai/mistral-small-3.1-24b-instruct": { input: 0.351, output: 0.555 },
-  "cloudflare:@cf/google/gemma-4-26b-a4b-it": { input: 0.100, output: 0.300 },
   "gemini:gemini-2.5-flash": { input: 0.30, output: 2.50 },
   "gemini:gemini-2.5-flash-lite": { input: 0.10, output: 0.40 },
   "openrouter:openrouter/free": { input: 0, output: 0 }
 };
 
 const defaultPricingUsdPerMillionTokens: Record<string, { input: number; output: number }> = {
-  cloudflare: { input: 0.049, output: 0.676 },
+  cloudflare: { input: 0.270, output: 0.850 },
   gemini: { input: 0.30, output: 2.50 },
   openrouter: { input: 0, output: 0 }
 };
