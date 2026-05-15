@@ -1,6 +1,8 @@
 type Env = {
   DEFAULT_PROVIDER?: string;
   CLOUDFLARE_MODEL?: string;
+  CLOUDFLARE_IMAGE_MODELS?: string;
+  CLOUDFLARE_IMAGE_MODEL_TRIAL_REQUESTS?: string;
   AI?: AiBinding;
   GEMINI_MODEL?: string;
   GEMINI_API_KEY?: string;
@@ -74,6 +76,10 @@ type ProviderCounter = UsageCounter & {
   model: string;
 };
 
+type ModelTestCounter = ProviderCounter & {
+  mode: string;
+};
+
 type UsageEvent = {
   timestamp: string;
   provider: string;
@@ -93,8 +99,11 @@ type UsageSnapshot = {
   totals: UsageCounter;
   daily: Record<string, UsageCounter>;
   providers: Record<string, ProviderCounter>;
+  modelTests: Record<string, ModelTestCounter>;
   recentEvents: UsageEvent[];
 };
+
+type ModelSelectionSnapshot = Pick<UsageSnapshot, "modelTests">;
 
 const usageKey = "usage:v1";
 
@@ -167,10 +176,10 @@ export default {
 
       const startedAt = Date.now();
       const provider = body.provider ?? (env.DEFAULT_PROVIDER as AnalyzeRequest["provider"]) ?? "cloudflare";
-      const model = modelForProvider(provider, env);
+      const model = await modelForRequest(provider, body, env);
 
       try {
-        const result = await analyzeWithProvider(provider, body, env);
+        const result = await analyzeWithProvider(provider, body, env, model);
 
         ctx.waitUntil(recordUsage(env, {
           timestamp: new Date().toISOString(),
@@ -226,16 +235,15 @@ function authorize(request: Request, env: Env): Response | null {
   return json({ error: "Unauthorized." }, 401);
 }
 
-async function analyzeWithProvider(provider: AnalyzeRequest["provider"], body: AnalyzeRequest, env: Env): Promise<AnalysisResult> {
-  if (provider === "openrouter") return analyzeWithOpenRouter(body, env);
-  if (provider === "gemini") return analyzeWithGemini(body, env);
-  return analyzeWithCloudflare(body, env);
+async function analyzeWithProvider(provider: AnalyzeRequest["provider"], body: AnalyzeRequest, env: Env, model: string): Promise<AnalysisResult> {
+  if (provider === "openrouter") return analyzeWithOpenRouter(body, env, model);
+  if (provider === "gemini") return analyzeWithGemini(body, env, model);
+  return analyzeWithCloudflare(body, env, model);
 }
 
-async function analyzeWithCloudflare(body: AnalyzeRequest, env: Env): Promise<AnalysisResult> {
+async function analyzeWithCloudflare(body: AnalyzeRequest, env: Env, model: string): Promise<AnalysisResult> {
   if (!env.AI) throw new Error("Cloudflare Workers AI binding is not configured.");
 
-  const model = modelForProvider("cloudflare", env);
   const prompt = promptFor(body);
   const input: Record<string, unknown> = {
     prompt: `You are MealVue's nutrition analysis engine. Return only strict JSON matching the requested schema. Do not include markdown, code fences, or commentary.\n\n${prompt}`,
@@ -262,7 +270,7 @@ async function analyzeWithCloudflare(body: AnalyzeRequest, env: Env): Promise<An
   try {
     payload = parseNutritionJSON(content);
   } catch {
-    const repaired = await repairCloudflareNutritionJSON(content, env);
+    const repaired = await repairCloudflareNutritionJSON(content, env, model);
     content = repaired.content;
     outputTokens += repaired.outputTokens;
     payload = repaired.payload;
@@ -279,10 +287,9 @@ async function analyzeWithCloudflare(body: AnalyzeRequest, env: Env): Promise<An
   };
 }
 
-async function repairCloudflareNutritionJSON(rawContent: string, env: Env): Promise<{ content: string; outputTokens: number; payload: unknown }> {
+async function repairCloudflareNutritionJSON(rawContent: string, env: Env, model: string): Promise<{ content: string; outputTokens: number; payload: unknown }> {
   if (!env.AI) throw new Error("Cloudflare Workers AI binding is not configured.");
 
-  const model = modelForProvider("cloudflare", env);
   const repairPrompt = `Convert the following food analysis into ONLY the strict JSON object schema below.
 Do not include markdown, code fences, headings, or explanations.
 
@@ -306,10 +313,9 @@ ${rawContent.slice(0, 4000)}`;
   };
 }
 
-async function analyzeWithGemini(body: AnalyzeRequest, env: Env): Promise<AnalysisResult> {
+async function analyzeWithGemini(body: AnalyzeRequest, env: Env, model: string): Promise<AnalysisResult> {
   if (!env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured.");
 
-  const model = modelForProvider("gemini", env);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const prompt = promptFor(body);
 
@@ -361,10 +367,9 @@ async function analyzeWithGemini(body: AnalyzeRequest, env: Env): Promise<Analys
   };
 }
 
-async function analyzeWithOpenRouter(body: AnalyzeRequest, env: Env): Promise<AnalysisResult> {
+async function analyzeWithOpenRouter(body: AnalyzeRequest, env: Env, model: string): Promise<AnalysisResult> {
   if (!env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not configured.");
 
-  const model = modelForProvider("openrouter", env);
   const content: unknown[] = [{ type: "text", text: promptFor(body) }];
   if (body.mode === "image" && body.imageBase64) {
     content.push({
@@ -542,6 +547,80 @@ function modelForProvider(provider: AnalyzeRequest["provider"], env: Env): strin
   return env.GEMINI_MODEL || "gemini-2.5-flash";
 }
 
+async function modelForRequest(provider: AnalyzeRequest["provider"], body: AnalyzeRequest, env: Env): Promise<string> {
+  if (provider !== "cloudflare" || body.mode !== "image") {
+    return modelForProvider(provider, env);
+  }
+
+  const models = cloudflareImageModels(env);
+  if (models.length <= 1) return models[0] ?? modelForProvider(provider, env);
+
+  const snapshot = await getModelSelectionSnapshot(env);
+  return chooseCloudflareImageModel(models, snapshot, trialRequestsPerModel(env));
+}
+
+function cloudflareImageModels(env: Env): string[] {
+  const configured = env.CLOUDFLARE_IMAGE_MODELS?.split(",")
+    .map(model => model.trim())
+    .filter(Boolean) ?? [];
+
+  if (configured.length > 0) return configured;
+
+  return [
+    env.CLOUDFLARE_MODEL || "@cf/meta/llama-3.2-11b-vision-instruct",
+    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/google/gemma-3-12b-it",
+    "@cf/mistralai/mistral-small-3.1-24b-instruct"
+  ];
+}
+
+function trialRequestsPerModel(env: Env): number {
+  const parsed = Number(env.CLOUDFLARE_IMAGE_MODEL_TRIAL_REQUESTS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 10;
+}
+
+async function getModelSelectionSnapshot(env: Env): Promise<ModelSelectionSnapshot> {
+  if (!env.USAGE_COUNTER) return { modelTests: {} };
+  const response = await usageStub(env).fetch("https://usage/snapshot");
+  const snapshot = await response.json<UsageSnapshot>();
+  return { modelTests: snapshot.modelTests ?? {} };
+}
+
+function chooseCloudflareImageModel(models: string[], snapshot: ModelSelectionSnapshot, trialRequests: number): string {
+  const counters = models.map(model => {
+    const key = modelTestKey("cloudflare", model, "image");
+    return {
+      model,
+      counter: snapshot.modelTests[key]
+    };
+  });
+
+  const untested = counters.find(item => (item.counter?.requests ?? 0) < trialRequests);
+  if (untested) return untested.model;
+
+  const eligible = counters
+    .filter(item => (item.counter?.successes ?? 0) > 0)
+    .map(item => {
+      const counter = item.counter!;
+      return {
+        model: item.model,
+        successRate: counter.successes / Math.max(counter.requests, 1),
+        avgLatency: counter.totalDurationMs / Math.max(counter.requests, 1)
+      };
+    })
+    .filter(item => item.successRate >= 0.80)
+    .sort((lhs, rhs) => lhs.avgLatency - rhs.avgLatency);
+
+  if (eligible.length > 0) return eligible[0].model;
+
+  return counters
+    .sort((lhs, rhs) => (rhs.counter?.successes ?? 0) - (lhs.counter?.successes ?? 0))[0]?.model ?? models[0];
+}
+
+function modelTestKey(provider: string, model: string, mode: string): string {
+  return `${provider}:${model}:${mode}`;
+}
+
 function numeric(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -558,13 +637,18 @@ function estimateTokens(text: string): number {
 }
 
 const pricingUsdPerMillionTokens: Record<string, { input: number; output: number }> = {
-  "cloudflare:@cf/meta/llama-3.2-11b-vision-instruct": { input: 0.049, output: 0.68 },
+  "cloudflare:@cf/meta/llama-3.2-11b-vision-instruct": { input: 0.049, output: 0.676 },
+  "cloudflare:@cf/meta/llama-4-scout-17b-16e-instruct": { input: 0.270, output: 0.850 },
+  "cloudflare:@cf/google/gemma-3-12b-it": { input: 0.345, output: 0.556 },
+  "cloudflare:@cf/mistralai/mistral-small-3.1-24b-instruct": { input: 0.351, output: 0.555 },
+  "cloudflare:@cf/google/gemma-4-26b-a4b-it": { input: 0.100, output: 0.300 },
   "gemini:gemini-2.5-flash": { input: 0.30, output: 2.50 },
+  "gemini:gemini-2.5-flash-lite": { input: 0.10, output: 0.40 },
   "openrouter:openrouter/free": { input: 0, output: 0 }
 };
 
 const defaultPricingUsdPerMillionTokens: Record<string, { input: number; output: number }> = {
-  cloudflare: { input: 0.049, output: 0.68 },
+  cloudflare: { input: 0.049, output: 0.676 },
   gemini: { input: 0.30, output: 2.50 },
   openrouter: { input: 0, output: 0 }
 };
@@ -610,6 +694,7 @@ function emptySnapshot(): UsageSnapshot {
     totals: emptyCounter(),
     daily: {},
     providers: {},
+    modelTests: {},
     recentEvents: []
   };
 }
@@ -660,6 +745,10 @@ export class UsageCounterObject {
     if (request.method === "POST" && url.pathname === "/event") {
       const event = await request.json() as UsageEvent;
       const snapshot = await this.snapshot();
+      snapshot.daily ??= {};
+      snapshot.providers ??= {};
+      snapshot.modelTests ??= {};
+      snapshot.recentEvents ??= [];
       snapshot.updatedAt = event.timestamp;
       applyUsageEvent(snapshot.totals, event);
 
@@ -675,6 +764,15 @@ export class UsageCounterObject {
       };
       applyUsageEvent(snapshot.providers[providerKey], event);
 
+      const testKey = modelTestKey(event.provider, event.model, event.mode);
+      snapshot.modelTests[testKey] ??= {
+        ...emptyCounter(),
+        provider: event.provider,
+        model: event.model,
+        mode: event.mode
+      };
+      applyUsageEvent(snapshot.modelTests[testKey], event);
+
       snapshot.recentEvents = [event, ...snapshot.recentEvents].slice(0, 50);
       await this.state.storage.put(usageKey, snapshot);
       return json({ ok: true });
@@ -689,7 +787,12 @@ export class UsageCounterObject {
   }
 
   private async snapshot(): Promise<UsageSnapshot> {
-    return (await this.state.storage.get<UsageSnapshot>(usageKey)) ?? emptySnapshot();
+    const snapshot = (await this.state.storage.get<UsageSnapshot>(usageKey)) ?? emptySnapshot();
+    snapshot.daily ??= {};
+    snapshot.providers ??= {};
+    snapshot.modelTests ??= {};
+    snapshot.recentEvents ??= [];
+    return snapshot;
   }
 }
 
@@ -775,6 +878,10 @@ function adminDashboardHtml(): string {
       <div class="wide"><table id="providers"></table></div>
     </section>
     <section>
+      <h2>Model Tests</h2>
+      <div class="wide"><table id="modelTests"></table></div>
+    </section>
+    <section>
       <h2>Daily</h2>
       <div class="wide"><table id="daily"></table></div>
     </section>
@@ -816,6 +923,9 @@ function adminDashboardHtml(): string {
       renderTable('providers', ['Provider', 'Model', 'Requests', 'Success', 'Failures', 'Tokens', 'Est. Cost'], Object.values(data.providers || {}).map(row => [
         row.provider, row.model, number.format(row.requests || 0), number.format(row.successes || 0), number.format(row.failures || 0), number.format(row.totalTokens || 0), money.format(row.estimatedCostUsd || 0)
       ]));
+      renderTable('modelTests', ['Provider', 'Model', 'Mode', 'Requests', 'Success Rate', 'Avg Latency', 'Failures', 'Tokens', 'Est. Cost'], Object.values(data.modelTests || {}).sort((a, b) => avgLatencyNumber(a) - avgLatencyNumber(b)).map(row => [
+        row.provider, row.model, row.mode, number.format(row.requests || 0), successRate(row), avgLatency(row), number.format(row.failures || 0), number.format(row.totalTokens || 0), money.format(row.estimatedCostUsd || 0)
+      ]));
       renderTable('daily', ['Date', 'Requests', 'Success', 'Failures', 'Tokens', 'Est. Cost', 'Avg Latency'], Object.entries(data.daily || {}).sort((a, b) => b[0].localeCompare(a[0])).map(([date, row]) => [
         date, number.format(row.requests || 0), number.format(row.successes || 0), number.format(row.failures || 0), number.format(row.totalTokens || 0), money.format(row.estimatedCostUsd || 0), avgLatency(row)
       ]));
@@ -849,6 +959,14 @@ function adminDashboardHtml(): string {
 
     function avgLatency(row) {
       return row && row.requests ? Math.round((row.totalDurationMs || 0) / row.requests) + ' ms' : '0 ms';
+    }
+
+    function avgLatencyNumber(row) {
+      return row && row.requests ? (row.totalDurationMs || 0) / row.requests : Number.MAX_SAFE_INTEGER;
+    }
+
+    function successRate(row) {
+      return row && row.requests ? Math.round(((row.successes || 0) / row.requests) * 100) + '%' : '0%';
     }
 
     function escapeHtml(value) {

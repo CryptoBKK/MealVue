@@ -147,6 +147,19 @@ In simulator Health app:
 - [ ] Thai (ถิ่น) - critical for local market
 - [ ] Consider: Chinese (for medical tourism in Bangkok)
 
+### 5.4 Near-Final Release Widget Set
+- [ ] Add `MealVueWidgets` Widget Extension target.
+- [ ] Add App Group capability for the main app and widget extension.
+- [ ] Cache today's nutrition totals into shared app group storage for widget display.
+- [ ] Add Quick Log widget with deep links:
+  - `mealvue://log/photo`
+  - `mealvue://log/library`
+  - `mealvue://log/text`
+  - `mealvue://log/barcode`
+- [ ] Add Progress Rings widget for protein, sodium, potassium, and phosphorus.
+- [ ] Add Nutrition Bar Graph widget for today's nutrient summary.
+- [ ] Validate widgets on real devices after core TestFlight flows are stable.
+
 ---
 
 ## Immediate Next Steps (This Week)

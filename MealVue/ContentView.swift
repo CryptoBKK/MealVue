@@ -14,6 +14,7 @@ import VisionKit
 struct ContentView: View {
     var onReady: () -> Void = {}
     @State private var selectedTab = 0
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -46,19 +47,161 @@ struct ContentView: View {
                     Label("Health", systemImage: "waveform.path.ecg")
                 }
                 .tag(4)
-
-            SettingsView {
-                selectedTab = 0
-            }
-                .tabItem {
-                    Label("Settings", systemImage: "gearshape.fill")
-                }
-                .tag(5)
         }
         .tint(.green)
         .onAppear {
             onReady()
+            migrateDefaultAIProviderIfNeeded()
         }
+        .sheet(isPresented: Binding(
+            get: { !hasCompletedOnboarding },
+            set: { isPresented in
+                if !isPresented {
+                    hasCompletedOnboarding = true
+                }
+            }
+        )) {
+            OnboardingWelcomeView {
+                hasCompletedOnboarding = true
+                selectedTab = 0
+            }
+        }
+    }
+
+    private func migrateDefaultAIProviderIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "didDefaultToCloudflareMealVueAI") else { return }
+        defaults.set(AIProvider.cloudflare.rawValue, forKey: "aiProvider")
+        defaults.set(true, forKey: "didDefaultToCloudflareMealVueAI")
+    }
+}
+
+private struct OnboardingWelcomeView: View {
+    var onComplete: () -> Void
+    @Environment(HealthKitManager.self) private var healthKitManager
+    @State private var isRequestingHealth = false
+    @State private var healthMessage = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Welcome to MealVue")
+                        .font(.largeTitle.bold())
+
+                    Text("Set your health profile first, then use photo, barcode, or text entry to estimate nutrition and compare foods with your kidney and heart targets.")
+                        .foregroundStyle(.secondary)
+
+                    onboardingRow(
+                        icon: "person.crop.circle.badge.checkmark",
+                        title: "Enter Personal Settings",
+                        text: "Go to Settings and add CKD stage, weight, and any custom nutrient targets from your clinician or dietitian."
+                    )
+
+                    onboardingRow(
+                        icon: "sparkles",
+                        title: "Use MealVue AI",
+                        text: "MealVue AI is built in for testing. Bring-your-own API providers can be used later for lower-cost subscription tiers."
+                    )
+
+                    onboardingRow(
+                        icon: "heart.text.square.fill",
+                        title: "Connect Apple Health",
+                        text: "Tap the button below to approve MealVue for saving meal nutrition and reading health trend data."
+                    )
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Apple Health Permission", systemImage: "heart.circle.fill")
+                            .font(.headline)
+                            .foregroundStyle(.green)
+
+                        Text("MealVue needs Health permission before it can sync nutrition totals to Apple Health. You can skip or change this later in the Health tab.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        Text("When iOS asks, allow the nutrition types you want MealVue to write.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                    .background(Color.green.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                    onboardingRow(
+                        icon: "exclamationmark.triangle.fill",
+                        title: "Review Every Estimate",
+                        text: "AI and barcode data can be wrong. Check the label and edit nutrient totals before saving."
+                    )
+
+                    if isRequestingHealth {
+                        ProgressView("Requesting Apple Health access...")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+
+                    if !healthMessage.isEmpty {
+                        InfoBanner(title: "Apple Health", message: healthMessage)
+                    }
+                }
+                .padding(24)
+            }
+            .navigationTitle("Getting Started")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isRequestingHealth ? "Requesting..." : "Connect Health & Start") {
+                        Task { await requestHealthAndComplete() }
+                    }
+                        .fontWeight(.bold)
+                        .disabled(isRequestingHealth)
+                }
+            }
+        }
+    }
+
+    private func requestHealthAndComplete() async {
+        guard !isRequestingHealth else { return }
+        isRequestingHealth = true
+        healthMessage = ""
+
+        if healthKitManager.isAvailable {
+            await healthKitManager.requestAuthorization()
+
+            switch healthKitManager.authorizationState {
+            case .authorized, .partial:
+                onComplete()
+            case .unavailable:
+                healthMessage = "Apple Health is not available on this device. You can continue using MealVue without Health sync."
+                onComplete()
+            default:
+                healthMessage = "Apple Health access was not fully enabled. You can turn it on later from the Health tab."
+                onComplete()
+            }
+        } else {
+            healthMessage = "Apple Health is not available on this device. You can continue using MealVue without Health sync."
+            onComplete()
+        }
+
+        isRequestingHealth = false
+    }
+
+    private func onboardingRow(icon: String, title: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(.green)
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(text)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -75,6 +218,10 @@ private struct DailyLogView: View {
     @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
     @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
     @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @AppStorage("showTodayProgressRings") private var showTodayProgressRings = true
+    @AppStorage("showTodayNutritionBarGraph") private var showTodayNutritionBarGraph = true
+    @State private var showSettings = false
 
     private var todayEntries: [FoodEntry] {
         entries.filter { Calendar.current.isDateInToday($0.timestamp) }
@@ -114,23 +261,25 @@ private struct DailyLogView: View {
                     TotalsCard(totals: totals)
                 }
 
-                Section("Progress Rings") {
-                    NutrientRingsView(
-                        proteinG: totals.proteinG,
-                        proteinTarget: proteinTarget,
-                        fiberG: totals.fiberG,
-                        fiberTarget: nil,
-                        sodiumMg: totals.sodiumMg,
-                        sodiumTarget: sodiumTarget,
-                        potassiumMg: totals.potassiumMg,
-                        potassiumTarget: potassiumTarget,
-                        phosphorusMg: totals.phosphorusMg,
-                        phosphorusTarget: phosphorusTarget
-                    )
+                if showTodayProgressRings {
+                    Section("Progress Rings") {
+                        NutrientRingsView(
+                            proteinG: totals.proteinG,
+                            proteinTarget: proteinTarget,
+                            sodiumMg: totals.sodiumMg,
+                            sodiumTarget: sodiumTarget,
+                            potassiumMg: totals.potassiumMg,
+                            potassiumTarget: potassiumTarget,
+                            phosphorusMg: totals.phosphorusMg,
+                            phosphorusTarget: phosphorusTarget
+                        )
+                    }
                 }
 
-                Section("Nutrition Bar Graph") {
-                    BarGraphView(totals: totals, title: "Today's Nutrition")
+                if showTodayNutritionBarGraph {
+                    Section("Nutrition Bar Graph") {
+                        BarGraphView(totals: totals, title: "Today's Nutrition")
+                    }
                 }
 
                 if todayEntries.isEmpty {
@@ -153,6 +302,20 @@ private struct DailyLogView: View {
                 }
             }
             .navigationTitle(todayTitle)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape.fill")
+                    }
+                }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView {
+                    showSettings = false
+                }
+            }
         }
     }
 
@@ -195,6 +358,21 @@ private struct LogFoodView: View {
     @State private var barcodeLookupMessage = ""
     @State private var isLookingUpBarcode = false
 
+    private var providerNotConfiguredMessage: String {
+        switch Config.selectedProvider {
+        case .anthropic:
+            return "Add an Anthropic API key in Settings if you want automatic nutrition estimates from food photos."
+        case .gemini:
+            return "Add a Google Gemini API key in Settings if you want automatic nutrition estimates from food photos."
+        case .openAI:
+            return "Add an OpenAI API key in Settings if you want automatic nutrition estimates from food photos."
+        case .openRouter:
+            return "Add an OpenRouter API key in Settings if you want automatic nutrition estimates from food photos."
+        case .cloudflare:
+            return "MealVue AI is temporarily unavailable. Try again later or use manual entry."
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -214,24 +392,20 @@ private struct LogFoodView: View {
                     }
                     .padding(.top, 30)
 
-                    VStack(spacing: 14) {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                         Button {
                             showCamera = true
                         } label: {
                             ActionButtonLabel(
                                 title: "Take Photo",
-                                systemImage: "camera.fill",
-                                fill: Color.green,
-                                foreground: .white
+                                systemImage: "camera.fill"
                             )
                         }
 
                         PhotosPicker(selection: $pickerItem, matching: .images) {
                             ActionButtonLabel(
-                                title: "Choose from Library",
-                                systemImage: "photo.on.rectangle.angled",
-                                fill: Color.green.opacity(0.12),
-                                foreground: .green
+                                title: "Library",
+                                systemImage: "photo.on.rectangle.angled"
                             )
                         }
 
@@ -239,10 +413,8 @@ private struct LogFoodView: View {
                             showTextEntry = true
                         } label: {
                             ActionButtonLabel(
-                                title: "Describe Food",
-                                systemImage: "text.bubble.fill",
-                                fill: Color.green.opacity(0.12),
-                                foreground: .green
+                                title: "Describe",
+                                systemImage: "text.bubble.fill"
                             )
                         }
 
@@ -250,10 +422,8 @@ private struct LogFoodView: View {
                             showBarcodeScanner = true
                         } label: {
                             ActionButtonLabel(
-                                title: "Scan Barcode",
-                                systemImage: "barcode.viewfinder",
-                                fill: Color.green.opacity(0.12),
-                                foreground: .green
+                                title: "Barcode",
+                                systemImage: "barcode.viewfinder"
                             )
                         }
                     }
@@ -272,7 +442,7 @@ private struct LogFoodView: View {
                     if !Config.isConfigured {
                         InfoBanner(
                             title: "AI not configured",
-                            message: "Add an Anthropic API key in Settings if you want automatic nutrition estimates from food photos."
+                            message: providerNotConfiguredMessage
                         )
                     }
                 }
@@ -398,6 +568,8 @@ private struct HistoryView: View {
 
 private struct DayHistoryView: View {
     let section: HistorySection
+    @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
 
     var body: some View {
         List {
@@ -413,10 +585,26 @@ private struct DayHistoryView: View {
                         FoodEntryRow(entry: entry)
                     }
                 }
+                .onDelete(perform: delete)
             }
         }
         .navigationTitle(section.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func delete(at offsets: IndexSet) {
+        let entriesToDelete = offsets.map { section.entries[$0] }
+        let entryIDs = entriesToDelete.map(\.entryId)
+
+        for entry in entriesToDelete {
+            modelContext.delete(entry)
+        }
+
+        Task {
+            for entryID in entryIDs {
+                try? await healthKitManager.deleteExportedMeal(entryID: entryID)
+            }
+        }
     }
 }
 
@@ -992,6 +1180,18 @@ private struct ShoppingHelperView: View {
     @State private var isChecking = false
     @State private var statusMessage = ""
     @State private var result: ShoppingCheckResult?
+    @State private var textDescription = ""
+    @State private var foodName = ""
+    @State private var quantity = ""
+    @State private var calories = ""
+    @State private var protein = ""
+    @State private var carbs = ""
+    @State private var fat = ""
+    @State private var fiber = ""
+    @State private var sodium = ""
+    @State private var potassium = ""
+    @State private var phosphorus = ""
+    @State private var notes = ""
 
     private var selectedCKDStage: CKDStage {
         CKDStage(rawValue: ckdStageRaw) ?? .notSpecified
@@ -1044,6 +1244,27 @@ private struct ShoppingHelperView: View {
                     }
                 }
 
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Describe a food")
+                        .font(.headline)
+
+                    TextField("Example: low sodium canned soup, one cup", text: $textDescription, axis: .vertical)
+                        .lineLimit(2...5)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        Task { await checkDescription() }
+                    } label: {
+                        Label("Check Description", systemImage: "text.magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(textDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !Config.isConfigured)
+                }
+                .padding()
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
                 if isChecking {
                     ProgressView("Checking food...")
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -1056,6 +1277,29 @@ private struct ShoppingHelperView: View {
 
                 if let result {
                     ShoppingCheckResultCard(result: result)
+
+                    MealEditor(
+                        foodName: $foodName,
+                        quantity: $quantity,
+                        calories: $calories,
+                        protein: $protein,
+                        carbs: $carbs,
+                        fat: $fat,
+                        fiber: $fiber,
+                        sodium: $sodium,
+                        potassium: $potassium,
+                        phosphorus: $phosphorus,
+                        notes: $notes
+                    )
+                    .padding(.horizontal, -20)
+
+                    Button {
+                        updateRecommendationFromEditedFields(source: result.source)
+                    } label: {
+                        Label("Update Recommendation", systemImage: "checklist.checked")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
                 } else {
                     ShoppingEmptyState()
                 }
@@ -1085,7 +1329,7 @@ private struct ShoppingHelperView: View {
 
     private func checkPhoto(_ image: UIImage) async {
         guard Config.isConfigured else {
-            statusMessage = "Photo checks need an AI provider and API key in Settings."
+            statusMessage = "Photo checks need MealVue AI or a configured AI provider."
             return
         }
 
@@ -1096,13 +1340,45 @@ private struct ShoppingHelperView: View {
         do {
             let nutrition = try await ClaudeService.analyzeFood(image: image)
             let snapshot = ShoppingNutritionSnapshot(nutritionResult: nutrition)
-            result = ShoppingDietEvaluator.evaluate(
+            let evaluated = ShoppingDietEvaluator.evaluate(
                 snapshot: snapshot,
                 source: "Photo estimate",
                 targets: targets,
                 kidneyChecksEnabled: kidneyChecksEnabled,
                 heartChecksEnabled: heartChecksEnabled
             )
+            result = evaluated
+            applyShoppingResult(evaluated)
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    private func checkDescription() async {
+        let description = textDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !description.isEmpty else { return }
+
+        guard Config.isConfigured else {
+            statusMessage = "Text checks need MealVue AI or a configured AI provider."
+            return
+        }
+
+        isChecking = true
+        statusMessage = ""
+        defer { isChecking = false }
+
+        do {
+            let nutrition = try await ClaudeService.analyzeText(description: description)
+            let snapshot = ShoppingNutritionSnapshot(nutritionResult: nutrition)
+            let evaluated = ShoppingDietEvaluator.evaluate(
+                snapshot: snapshot,
+                source: "Text estimate",
+                targets: targets,
+                kidneyChecksEnabled: kidneyChecksEnabled,
+                heartChecksEnabled: heartChecksEnabled
+            )
+            result = evaluated
+            applyShoppingResult(evaluated)
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -1119,16 +1395,56 @@ private struct ShoppingHelperView: View {
         do {
             let product = try await BarcodeLookupService.lookup(barcode: trimmed)
             let snapshot = ShoppingNutritionSnapshot(product: product, amount: product.defaultAmountG)
-            result = ShoppingDietEvaluator.evaluate(
+            let evaluated = ShoppingDietEvaluator.evaluate(
                 snapshot: snapshot,
                 source: "Barcode lookup",
                 targets: targets,
                 kidneyChecksEnabled: kidneyChecksEnabled,
                 heartChecksEnabled: heartChecksEnabled
             )
+            result = evaluated
+            applyShoppingResult(evaluated)
         } catch {
             statusMessage = error.localizedDescription
         }
+    }
+
+    private func applyShoppingResult(_ result: ShoppingCheckResult) {
+        foodName = result.snapshot.name
+        quantity = result.snapshot.quantity
+        calories = "\(result.snapshot.calories)"
+        protein = format(result.snapshot.proteinG)
+        carbs = format(result.snapshot.carbsG)
+        fat = format(result.snapshot.fatG)
+        fiber = format(result.snapshot.fiberG)
+        sodium = format(result.snapshot.sodiumMg)
+        potassium = format(result.snapshot.potassiumMg)
+        phosphorus = format(result.snapshot.phosphorusMg)
+        notes = result.snapshot.notes
+    }
+
+    private func updateRecommendationFromEditedFields(source: String) {
+        let snapshot = ShoppingNutritionSnapshot(
+            name: foodName.trimmingCharacters(in: .whitespacesAndNewlines),
+            quantity: quantity.trimmingCharacters(in: .whitespacesAndNewlines),
+            calories: Int(calories) ?? 0,
+            proteinG: Double(protein) ?? 0,
+            carbsG: Double(carbs) ?? 0,
+            fatG: Double(fat) ?? 0,
+            fiberG: Double(fiber) ?? 0,
+            sodiumMg: Double(sodium) ?? 0,
+            potassiumMg: Double(potassium) ?? 0,
+            phosphorusMg: Double(phosphorus) ?? 0,
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        result = ShoppingDietEvaluator.evaluate(
+            snapshot: snapshot,
+            source: source,
+            targets: targets,
+            kidneyChecksEnabled: kidneyChecksEnabled,
+            heartChecksEnabled: heartChecksEnabled
+        )
     }
 
     private func parsedTarget(_ text: String) -> Double? {
@@ -1150,6 +1466,32 @@ private struct ShoppingNutritionSnapshot {
     let potassiumMg: Double
     let phosphorusMg: Double
     let notes: String
+
+    init(
+        name: String,
+        quantity: String,
+        calories: Int,
+        proteinG: Double,
+        carbsG: Double,
+        fatG: Double,
+        fiberG: Double,
+        sodiumMg: Double,
+        potassiumMg: Double,
+        phosphorusMg: Double,
+        notes: String
+    ) {
+        self.name = name
+        self.quantity = quantity
+        self.calories = calories
+        self.proteinG = proteinG
+        self.carbsG = carbsG
+        self.fatG = fatG
+        self.fiberG = fiberG
+        self.sodiumMg = sodiumMg
+        self.potassiumMg = potassiumMg
+        self.phosphorusMg = phosphorusMg
+        self.notes = notes
+    }
 
     init(nutritionResult: NutritionResult) {
         name = nutritionResult.foodName
@@ -1451,6 +1793,7 @@ private struct ShoppingEmptyState: View {
 
 private struct SettingsView: View {
     var onDone: () -> Void = {}
+    @Query(sort: \FoodEntry.timestamp, order: .reverse) private var entries: [FoodEntry]
     @AppStorage("anthropicAPIKey") private var anthropicAPIKey = ""
     @AppStorage("anthropicModelID") private var anthropicModelID = AnthropicModel.defaultModel.id
     @AppStorage("geminiAPIKey") private var geminiAPIKey = ""
@@ -1458,8 +1801,8 @@ private struct SettingsView: View {
     @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
     @AppStorage("openAIModelID") private var openAIModelID = OpenAIModel.defaultModel.id
     @AppStorage("openRouterAPIKey") private var openRouterAPIKey = ""
-    @AppStorage("openRouterModelID") private var openRouterModelID = OpenRouterModel.autoRouter.id
-    @AppStorage("aiProvider") private var aiProviderRaw = AIProvider.anthropic.rawValue
+    @AppStorage("openRouterModelID") private var openRouterModelID = OpenRouterModel.freeRouter.id
+    @AppStorage("aiProvider") private var aiProviderRaw = AIProvider.cloudflare.rawValue
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
     @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
     @AppStorage("userSex") private var userSex = UserSex.preferNotToSay.rawValue
@@ -1471,8 +1814,12 @@ private struct SettingsView: View {
     @AppStorage("sodiumTargetMg") private var sodiumTargetMg = ""
     @AppStorage("potassiumTargetMg") private var potassiumTargetMg = ""
     @AppStorage("phosphorusTargetMg") private var phosphorusTargetMg = ""
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @AppStorage("showTodayProgressRings") private var showTodayProgressRings = true
+    @AppStorage("showTodayNutritionBarGraph") private var showTodayNutritionBarGraph = true
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
     @State private var showAnthropicKey = false
     @State private var showGeminiKey = false
     @State private var showOpenAIKey = false
@@ -1488,8 +1835,10 @@ private struct SettingsView: View {
     @State private var geminiError = ""
     @State private var openAIError = ""
     @State private var openRouterError = ""
+    @State private var showResetConfirmation = false
+    @State private var resetStatus = ""
     private var selectedProvider: AIProvider {
-        AIProvider(rawValue: aiProviderRaw) ?? .anthropic
+        AIProvider(rawValue: aiProviderRaw) ?? .cloudflare
     }
 
     private var selectedOpenRouterModel: OpenRouterModel? {
@@ -1516,7 +1865,8 @@ private struct SettingsView: View {
                             text: $anthropicAPIKey,
                             isVisible: $showAnthropicKey,
                             focusedField: $focusedField,
-                            field: .anthropicKey
+                            field: .anthropicKey,
+                            onSubmit: dismissKeyboard
                         )
 
                         Text("Uses Anthropic's Messages API for food photo and text analysis.")
@@ -1538,7 +1888,8 @@ private struct SettingsView: View {
                             text: $geminiAPIKey,
                             isVisible: $showGeminiKey,
                             focusedField: $focusedField,
-                            field: .geminiKey
+                            field: .geminiKey,
+                            onSubmit: dismissKeyboard
                         )
 
                         Button(isLoadingGeminiModels ? "Loading Models..." : "Refresh Gemini Models") {
@@ -1575,7 +1926,8 @@ private struct SettingsView: View {
                             text: $openAIAPIKey,
                             isVisible: $showOpenAIKey,
                             focusedField: $focusedField,
-                            field: .openAIKey
+                            field: .openAIKey,
+                            onSubmit: dismissKeyboard
                         )
 
                         Button(isLoadingOpenAIModels ? "Loading Models..." : "Refresh OpenAI Models") {
@@ -1606,13 +1958,14 @@ private struct SettingsView: View {
                         Text(openAIAPIKey.isEmpty ? "No OpenAI API key saved." : "OpenAI API key saved.")
                             .font(.footnote.weight(.semibold))
                             .foregroundColor(openAIAPIKey.isEmpty ? .secondary : .green)
-                    } else {
+                    } else if selectedProvider == .openRouter {
                         APIKeyField(
                             title: "OpenRouter API Key",
                             text: $openRouterAPIKey,
                             isVisible: $showOpenRouterKey,
                             focusedField: $focusedField,
-                            field: .openRouterKey
+                            field: .openRouterKey,
+                            onSubmit: dismissKeyboard
                         )
 
                         Button(isLoadingModels ? "Loading Models..." : "Refresh OpenRouter Models") {
@@ -1649,11 +2002,15 @@ private struct SettingsView: View {
                         Text(openRouterAPIKey.isEmpty ? "No OpenRouter API key saved." : "OpenRouter API key saved.")
                             .font(.footnote.weight(.semibold))
                             .foregroundColor(openRouterAPIKey.isEmpty ? .secondary : .green)
+                    } else {
+                        Label("Built-in MealVue AI is enabled.", systemImage: "sparkles")
+                            .foregroundStyle(.green)
+
+                        Text("Uses Cloudflare Workers AI through the MealVue backend. Testers do not need to enter AI API keys.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
-                    Button("Done Typing") {
-                        focusedField = nil
-                    }
                 }
 
                 Section("Health Checks") {
@@ -1661,6 +2018,15 @@ private struct SettingsView: View {
                     Toggle("Heart Health Checker", isOn: $heartChecksEnabled)
 
                     Text("Turn these checks on or off for AI warnings and guide content.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Today Screen") {
+                    Toggle("Show Progress Rings", isOn: $showTodayProgressRings)
+                    Toggle("Show Nutrition Bar Graph", isOn: $showTodayNutritionBarGraph)
+
+                    Text("Use these controls to simplify the Today tab during testing or for users who prefer fewer visual summaries.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1718,6 +2084,31 @@ private struct SettingsView: View {
                     Label("Kidney and heart health guidance", systemImage: "heart.text.square.fill")
                 }
 
+                Section("Data") {
+                    Button {
+                        hasCompletedOnboarding = false
+                    } label: {
+                        Label("Show Onboarding Again", systemImage: "questionmark.circle")
+                    }
+
+                    Button(role: .destructive) {
+                        showResetConfirmation = true
+                    } label: {
+                        Label("Erase All MealVue Data From iCloud", systemImage: "trash")
+                    }
+                    .disabled(entries.isEmpty)
+
+                    Text("Deletes MealVue meal records from this device and from iCloud-synced MealVue data on your other devices.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    if !resetStatus.isEmpty {
+                        Text(resetStatus)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("Safety") {
                     Text("This app is for reference and self-tracking only.")
                     Text("Kidney diets and medication decisions should be personalized with a clinician, renal dietitian, or pharmacist.")
@@ -1740,19 +2131,67 @@ private struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        focusedField = nil
-                        onDone()
+                        finishSettings()
                     }
+                    .fontWeight(.semibold)
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") {
-                        focusedField = nil
+                    Button("Done Typing") {
+                        finishSettings()
                     }
                 }
             }
+            .confirmationDialog(
+                "Erase all MealVue meal data?",
+                isPresented: $showResetConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Erase MealVue iCloud Data", role: .destructive) {
+                    resetMealData()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes MealVue meal records from this device and from iCloud-synced MealVue data on your other devices. It also attempts to remove matching MealVue nutrition entries from Apple Health.")
+            }
         }
+    }
+
+    private func resetMealData() {
+        let entriesToDelete = entries
+        let entryIDs = entriesToDelete.map(\.entryId)
+        let count = entriesToDelete.count
+
+        for entry in entriesToDelete {
+            modelContext.delete(entry)
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            resetStatus = "Could not erase MealVue data: \(error.localizedDescription)"
+            return
+        }
+
+        resetStatus = "Erased \(count) MealVue meal records. Cleaning Apple Health exports..."
+
+        Task {
+            for entryID in entryIDs {
+                try? await healthKitManager.deleteExportedMeal(entryID: entryID)
+            }
+
+            resetStatus = "Erased \(count) MealVue meal records and requested Apple Health cleanup."
+        }
+    }
+
+    private func dismissKeyboard() {
+        focusedField = nil
+    }
+
+    private func finishSettings() {
+        focusedField = nil
+        onDone()
     }
 
     private func loadOpenRouterModels() async {
@@ -1771,13 +2210,13 @@ private struct SettingsView: View {
             openRouterModels = fetched.isEmpty ? OpenRouterModel.recommended : fetched
 
             if !openRouterModels.contains(where: { $0.id == openRouterModelID }) {
-                openRouterModelID = openRouterModels.first?.id ?? OpenRouterModel.autoRouter.id
+                openRouterModelID = openRouterModels.first?.id ?? OpenRouterModel.freeRouter.id
             }
 
             openRouterError = fetched.isEmpty ? "No OpenRouter models were returned for this key. Auto Router and Free Router are still available." : ""
         } catch {
             openRouterModels = OpenRouterModel.recommended
-            openRouterModelID = OpenRouterModel.autoRouter.id
+            openRouterModelID = OpenRouterModel.freeRouter.id
             openRouterError = error.localizedDescription
         }
     }
@@ -1889,14 +2328,36 @@ private enum UserSex: String, CaseIterable, Identifiable {
 
 private enum CKDStage: String, CaseIterable, Identifiable {
     case notSpecified = "Not Specified"
-    case stage1to2 = "Stages 1-2"
+    case stage1 = "Stage 1"
+    case stage2 = "Stage 2"
+    case stage3a = "Stage 3a"
+    case stage3b = "Stage 3b"
+    case stage4 = "Stage 4"
     case stage3to4 = "Stages 3-4"
     case stage5NotDialysis = "Stage 5 Not On Dialysis"
     case dialysis = "Dialysis"
 
+    static let allCases: [CKDStage] = [
+        .notSpecified,
+        .stage1,
+        .stage2,
+        .stage3a,
+        .stage3b,
+        .stage4,
+        .stage5NotDialysis,
+        .dialysis
+    ]
+
     var id: String { rawValue }
 
-    var displayName: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .stage3to4:
+            return "Stages 3-4 (Legacy)"
+        default:
+            return rawValue
+        }
+    }
 }
 
 private struct APIKeyField: View {
@@ -1905,19 +2366,23 @@ private struct APIKeyField: View {
     @Binding var isVisible: Bool
     @FocusState.Binding var focusedField: SettingsField?
     let field: SettingsField
+    var onSubmit: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
             Group {
                 if isVisible {
                     TextField(title, text: $text)
+                        .onSubmit { onSubmit?() }
                 } else {
                     SecureField(title, text: $text)
+                        .onSubmit { onSubmit?() }
                 }
             }
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .focused($focusedField, equals: field)
+            .submitLabel(.done)
 
             Button(isVisible ? "Hide" : "View") {
                 isVisible.toggle()
@@ -1978,7 +2443,12 @@ private struct FoodEntryRow: View {
 
 private struct FoodEntryDetailView: View {
     let entry: FoodEntry
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @State private var showEditor = false
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         List {
@@ -2030,6 +2500,38 @@ private struct FoodEntryDetailView: View {
         }
         .navigationTitle(entry.foodName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showEditor = true
+                } label: {
+                    Label("Edit", systemImage: "square.and.pencil")
+                }
+            }
+        }
+        .sheet(isPresented: $showEditor) {
+            HistoricalMealEditView(entry: entry)
+        }
+        .confirmationDialog(
+            "Delete this meal?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Meal", role: .destructive) {
+                deleteEntry()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the MealVue history item and attempts to remove the matching Apple Health nutrition export.")
+        }
     }
 
     private func detailRow(_ label: String, value: String) -> some View {
@@ -2039,6 +2541,246 @@ private struct FoodEntryDetailView: View {
             Text(value)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func deleteEntry() {
+        let entryID = entry.entryId
+        modelContext.delete(entry)
+
+        Task {
+            try? await healthKitManager.deleteExportedMeal(entryID: entryID)
+        }
+
+        dismiss()
+    }
+}
+
+private struct HistoricalMealEditView: View {
+    let entry: FoodEntry
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthKitManager
+    @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
+
+    @State private var foodName = ""
+    @State private var quantity = ""
+    @State private var calories = ""
+    @State private var protein = ""
+    @State private var carbs = ""
+    @State private var fat = ""
+    @State private var fiber = ""
+    @State private var sodium = ""
+    @State private var potassium = ""
+    @State private var phosphorus = ""
+    @State private var notes = ""
+    @State private var kidneyWarning = ""
+    @State private var heartWarning = ""
+    @State private var sodiumWarning = ""
+    @State private var potassiumWarning = ""
+    @State private var phosphorusWarning = ""
+    @State private var confidence = "manual"
+    @State private var providerUsed = ""
+    @State private var modelUsed = ""
+    @State private var isRedoingAI = false
+    @State private var errorMessage = ""
+    @State private var didLoadEntry = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    if let image = entry.uiImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                            .padding(.horizontal)
+                    }
+
+                    if !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.red.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(.horizontal)
+                    }
+
+                    Button {
+                        Task { await redoAI() }
+                    } label: {
+                        if isRedoingAI {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Label("Redo AI Analysis", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRedoingAI || !Config.isConfigured)
+                    .padding(.horizontal)
+
+                    Text(entry.uiImage == nil ? "AI Redo will analyze the current food name and quantity." : "AI Redo will re-analyze the saved photo using the current food name and quantity as correction text.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+
+                    MealEditor(
+                        foodName: $foodName,
+                        quantity: $quantity,
+                        calories: $calories,
+                        protein: $protein,
+                        carbs: $carbs,
+                        fat: $fat,
+                        fiber: $fiber,
+                        sodium: $sodium,
+                        potassium: $potassium,
+                        phosphorus: $phosphorus,
+                        notes: $notes
+                    )
+                }
+                .padding(.vertical)
+            }
+            .navigationTitle("Edit Meal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .fontWeight(.bold)
+                }
+            }
+            .onAppear(perform: loadEntryIfNeeded)
+        }
+    }
+
+    private func loadEntryIfNeeded() {
+        guard !didLoadEntry else { return }
+        didLoadEntry = true
+
+        foodName = entry.foodName
+        quantity = entry.estimatedQuantity
+        calories = "\(entry.calories)"
+        protein = format(entry.proteinG)
+        carbs = format(entry.carbsG)
+        fat = format(entry.fatG)
+        fiber = format(entry.fiberG)
+        sodium = format(entry.sodiumMg)
+        potassium = format(entry.potassiumMg)
+        phosphorus = format(entry.phosphorusMg)
+        notes = entry.notes
+        kidneyWarning = entry.kidneyWarning
+        confidence = entry.confidence
+    }
+
+    private func redoAI() async {
+        guard Config.isConfigured else {
+            errorMessage = "MealVue AI is not available. Check AI settings and try again."
+            return
+        }
+
+        isRedoingAI = true
+        errorMessage = ""
+        defer { isRedoingAI = false }
+
+        do {
+            let result: NutritionResult
+            if let image = entry.uiImage {
+                result = try await ClaudeService.analyzeFood(image: image, correctedDescription: correctedDescription)
+            } else {
+                result = try await ClaudeService.analyzeText(description: correctedDescription)
+            }
+            apply(result: result)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private var correctedDescription: String {
+        let trimmedFoodName = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedQuantity = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedFoodName.isEmpty {
+            return trimmedQuantity.isEmpty ? entry.foodName : trimmedQuantity
+        }
+
+        if trimmedQuantity.isEmpty {
+            return trimmedFoodName
+        }
+
+        return "\(trimmedQuantity) of \(trimmedFoodName)"
+    }
+
+    private func apply(result: NutritionResult) {
+        foodName = result.foodName
+        quantity = result.estimatedQuantity
+        calories = "\(result.calories)"
+        protein = format(result.proteinG)
+        carbs = format(result.carbsG)
+        fat = format(result.fatG)
+        fiber = format(result.fiberG)
+        sodium = format(result.sodiumMg)
+        potassium = format(result.potassiumMg)
+        phosphorus = format(result.phosphorusMg)
+        notes = result.notes
+        kidneyWarning = Config.kidneyChecksEnabled ? result.kidneyWarning : ""
+        heartWarning = Config.heartChecksEnabled ? result.heartWarning : ""
+        sodiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.sodiumWarning : ""
+        potassiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.potassiumWarning : ""
+        phosphorusWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.phosphorusWarning : ""
+        confidence = result.confidence
+        providerUsed = result.providerName
+        modelUsed = result.modelUsed
+    }
+
+    private func save() {
+        entry.foodName = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.estimatedQuantity = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.calories = Int(calories) ?? 0
+        entry.proteinG = Double(protein) ?? 0
+        entry.carbsG = Double(carbs) ?? 0
+        entry.fatG = Double(fat) ?? 0
+        entry.fiberG = Double(fiber) ?? 0
+        entry.sodiumMg = Double(sodium) ?? 0
+        entry.potassiumMg = Double(potassium) ?? 0
+        entry.phosphorusMg = Double(phosphorus) ?? 0
+        entry.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.kidneyWarning = kidneyChecksEnabled ? kidneyWarning.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        entry.confidence = confidence
+
+        if !providerUsed.isEmpty || !modelUsed.isEmpty {
+            entry.aiNotes = combinedAINotes(
+                baseNotes: notes,
+                heartWarning: heartChecksEnabled ? heartWarning : "",
+                sodiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? sodiumWarning : "",
+                potassiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? potassiumWarning : "",
+                phosphorusWarning: (kidneyChecksEnabled || heartChecksEnabled) ? phosphorusWarning : "",
+                provider: providerUsed,
+                model: modelUsed
+            )
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            errorMessage = "MealVue could not save this meal. Try again."
+            return
+        }
+
+        Task {
+            try? await healthKitManager.deleteExportedMeal(entryID: entry.entryId)
+            try? await healthKitManager.save(entry: entry)
+        }
+
+        dismiss()
     }
 }
 
@@ -2183,8 +2925,31 @@ private struct BarcodeProductEntryView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(HealthKitManager.self) private var healthKitManager
     @AppStorage("kidneyChecksEnabled") private var kidneyChecksEnabled = true
+    @AppStorage("heartChecksEnabled") private var heartChecksEnabled = true
 
     @State private var amountG: String
+    @State private var foodName = ""
+    @State private var quantity = ""
+    @State private var caloriesText = ""
+    @State private var protein = ""
+    @State private var carbs = ""
+    @State private var fat = ""
+    @State private var fiber = ""
+    @State private var sodium = ""
+    @State private var potassium = ""
+    @State private var phosphorus = ""
+    @State private var notes = ""
+    @State private var kidneyWarning = ""
+    @State private var heartWarning = ""
+    @State private var sodiumWarning = ""
+    @State private var potassiumWarning = ""
+    @State private var phosphorusWarning = ""
+    @State private var confidence = "barcode"
+    @State private var providerUsed = ""
+    @State private var modelUsed = ""
+    @State private var isRedoingAI = false
+    @State private var errorMessage = ""
+    @State private var didInitialize = false
 
     init(product: BarcodeProduct, onSave: @escaping () -> Void) {
         self.product = product
@@ -2204,43 +2969,105 @@ private struct BarcodeProductEntryView: View {
         Int((product.caloriesPer100G * multiplier).rounded())
     }
 
+    private var amountPresets: [(String, Double)] {
+        var presets: [(String, Double)] = [("100 g/ml", 100)]
+
+        if let serving = product.servingQuantityG, serving > 0 {
+            presets.insert(("1 serving", serving), at: 0)
+            presets.append(("2 servings", serving * 2))
+        }
+
+        presets.append(("Half pack", 50))
+        return presets
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Product") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
                     Text(product.displayName)
                         .font(.headline)
+                        .padding(.horizontal)
 
-                    if !product.packageQuantity.isEmpty {
-                        LabeledContent("Package", value: product.packageQuantity)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !product.packageQuantity.isEmpty {
+                            LabeledContent("Package", value: product.packageQuantity)
+                        }
+
+                        if !product.servingSize.isEmpty {
+                            LabeledContent("Listed serving", value: product.servingSize)
+                        }
+
+                        LabeledContent("Barcode", value: product.barcode)
+                    }
+                    .padding()
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.horizontal)
+
+                    GroupBox("Amount") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                TextField("Amount", text: $amountG)
+                                    .keyboardType(.decimalPad)
+                                Text("g or ml")
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110))], spacing: 8) {
+                                ForEach(amountPresets, id: \.0) { label, amount in
+                                    Button(label) {
+                                        amountG = format(amount)
+                                        updateFieldsFromBarcode()
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    if !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(.horizontal)
                     }
 
-                    if !product.servingSize.isEmpty {
-                        LabeledContent("Listed serving", value: product.servingSize)
+                    Button {
+                        Task { await redoAI() }
+                    } label: {
+                        if isRedoingAI {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Label("Redo AI Analysis", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRedoingAI || !Config.isConfigured)
+                    .padding(.horizontal)
 
-                    LabeledContent("Barcode", value: product.barcode)
+                    MealEditor(
+                        foodName: $foodName,
+                        quantity: $quantity,
+                        calories: $caloriesText,
+                        protein: $protein,
+                        carbs: $carbs,
+                        fat: $fat,
+                        fiber: $fiber,
+                        sodium: $sodium,
+                        potassium: $potassium,
+                        phosphorus: $phosphorus,
+                        notes: $notes
+                    )
                 }
-
-                Section("Amount") {
-                    HStack {
-                        TextField("Amount", text: $amountG)
-                            .keyboardType(.decimalPad)
-                        Text("g or ml")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Nutrition For Amount") {
-                    LabeledContent("Calories", value: "\(calories) kcal")
-                    LabeledContent("Protein", value: "\(Int((product.proteinPer100G * multiplier).rounded())) g")
-                    LabeledContent("Carbs", value: "\(Int((product.carbsPer100G * multiplier).rounded())) g")
-                    LabeledContent("Fat", value: "\(Int((product.fatPer100G * multiplier).rounded())) g")
-                    LabeledContent("Fiber", value: "\(Int((product.fiberPer100G * multiplier).rounded())) g")
-                    LabeledContent("Sodium", value: "\(Int((product.sodiumPer100GMg * multiplier).rounded())) mg")
-                    LabeledContent("Potassium", value: "\(Int((product.potassiumPer100GMg * multiplier).rounded())) mg")
-                    LabeledContent("Phosphorus", value: "\(Int((product.phosphorusPer100GMg * multiplier).rounded())) mg")
-                }
+                .padding(.vertical)
             }
             .navigationTitle("Barcode Entry")
             .navigationBarTitleDisplayMode(.inline)
@@ -2255,25 +3082,94 @@ private struct BarcodeProductEntryView: View {
                         .disabled(amount <= 0)
                 }
             }
+            .onAppear(perform: initializeIfNeeded)
+            .onChange(of: amountG) { _, _ in
+                updateFieldsFromBarcode()
+            }
+        }
+    }
+
+    private func initializeIfNeeded() {
+        guard !didInitialize else { return }
+        didInitialize = true
+        foodName = product.displayName
+        notes = "Barcode: \(product.barcode). Nutrition data from Open Food Facts. Review label values before relying on totals."
+        updateFieldsFromBarcode()
+    }
+
+    private func updateFieldsFromBarcode() {
+        quantity = "\(format(amount)) g/ml"
+        caloriesText = "\(calories)"
+        protein = format(product.proteinPer100G * multiplier)
+        carbs = format(product.carbsPer100G * multiplier)
+        fat = format(product.fatPer100G * multiplier)
+        fiber = format(product.fiberPer100G * multiplier)
+        sodium = format(product.sodiumPer100GMg * multiplier)
+        potassium = format(product.potassiumPer100GMg * multiplier)
+        phosphorus = format(product.phosphorusPer100GMg * multiplier)
+        kidneyWarning = kidneyChecksEnabled ? barcodeKidneyWarning : ""
+    }
+
+    private func redoAI() async {
+        guard Config.isConfigured else {
+            errorMessage = "MealVue AI is not available. Check AI settings and try again."
+            return
+        }
+
+        isRedoingAI = true
+        errorMessage = ""
+        defer { isRedoingAI = false }
+
+        do {
+            let result = try await ClaudeService.analyzeText(description: "\(quantity) of \(foodName)")
+            foodName = result.foodName
+            quantity = result.estimatedQuantity
+            caloriesText = "\(result.calories)"
+            protein = format(result.proteinG)
+            carbs = format(result.carbsG)
+            fat = format(result.fatG)
+            fiber = format(result.fiberG)
+            sodium = format(result.sodiumMg)
+            potassium = format(result.potassiumMg)
+            phosphorus = format(result.phosphorusMg)
+            notes = result.notes
+            kidneyWarning = Config.kidneyChecksEnabled ? result.kidneyWarning : ""
+            heartWarning = Config.heartChecksEnabled ? result.heartWarning : ""
+            sodiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.sodiumWarning : ""
+            potassiumWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.potassiumWarning : ""
+            phosphorusWarning = (Config.kidneyChecksEnabled || Config.heartChecksEnabled) ? result.phosphorusWarning : ""
+            confidence = result.confidence
+            providerUsed = result.providerName
+            modelUsed = result.modelUsed
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
     private func save() {
         let entry = FoodEntry(
-            foodName: product.displayName,
-            estimatedQuantity: "\(format(amount)) g/ml",
-            calories: calories,
-            proteinG: product.proteinPer100G * multiplier,
-            carbsG: product.carbsPer100G * multiplier,
-            fatG: product.fatPer100G * multiplier,
-            fiberG: product.fiberPer100G * multiplier,
-            sodiumMg: product.sodiumPer100GMg * multiplier,
-            potassiumMg: product.potassiumPer100GMg * multiplier,
-            phosphorusMg: product.phosphorusPer100GMg * multiplier,
-            notes: "Barcode: \(product.barcode)",
-            kidneyWarning: kidneyChecksEnabled ? barcodeKidneyWarning : "",
-            confidence: "barcode",
-            aiNotes: "Nutrition data from Open Food Facts. Review label values before relying on totals.",
+            foodName: foodName.trimmingCharacters(in: .whitespacesAndNewlines),
+            estimatedQuantity: quantity.trimmingCharacters(in: .whitespacesAndNewlines),
+            calories: Int(caloriesText) ?? 0,
+            proteinG: Double(protein) ?? 0,
+            carbsG: Double(carbs) ?? 0,
+            fatG: Double(fat) ?? 0,
+            fiberG: Double(fiber) ?? 0,
+            sodiumMg: Double(sodium) ?? 0,
+            potassiumMg: Double(potassium) ?? 0,
+            phosphorusMg: Double(phosphorus) ?? 0,
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            kidneyWarning: kidneyChecksEnabled ? kidneyWarning.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            confidence: confidence,
+            aiNotes: combinedAINotes(
+                baseNotes: notes,
+                heartWarning: heartChecksEnabled ? heartWarning : "",
+                sodiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? sodiumWarning : "",
+                potassiumWarning: (kidneyChecksEnabled || heartChecksEnabled) ? potassiumWarning : "",
+                phosphorusWarning: (kidneyChecksEnabled || heartChecksEnabled) ? phosphorusWarning : "",
+                provider: providerUsed,
+                model: modelUsed
+            ),
             imageData: nil
         )
 
@@ -2510,6 +3406,17 @@ private struct PhotoAnalysisView: View {
                                 .padding(.horizontal)
                         }
 
+                        if Config.isConfigured {
+                            Button {
+                                Task { await redoAnalysisWithRetries() }
+                            } label: {
+                                Label("AI Redo", systemImage: "arrow.clockwise")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.horizontal)
+                        }
+
                         MealEditor(
                             foodName: $foodName,
                             quantity: $quantity,
@@ -2523,17 +3430,6 @@ private struct PhotoAnalysisView: View {
                             phosphorus: $phosphorus,
                             notes: $notes
                         )
-
-                        if Config.isConfigured {
-                            Button {
-                                Task { await redoAnalysisWithRetries() }
-                            } label: {
-                                Label("AI Redo", systemImage: "arrow.clockwise")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .padding(.horizontal)
-                        }
                     case .error(let message):
                         ErrorStateView(message: message) {
                             Task { await analyzeWithRetries() }
@@ -2818,6 +3714,17 @@ private struct TextAnalysisEntryView: View {
                                     .padding(.horizontal)
                             }
 
+                            if Config.isConfigured {
+                                Button {
+                                    Task { await analyze() }
+                                } label: {
+                                    Label("Redo AI Analysis", systemImage: "arrow.clockwise")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .padding(.horizontal)
+                            }
+
                             MealEditor(
                                 foodName: $foodName,
                                 quantity: $quantity,
@@ -2861,7 +3768,8 @@ private struct TextAnalysisEntryView: View {
         phase = .analyzing
 
         do {
-            let result = try await ClaudeService.analyzeText(description: description.trimmingCharacters(in: .whitespacesAndNewlines))
+            let prompt = analysisDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result = try await ClaudeService.analyzeText(description: prompt)
             foodName = result.foodName
             quantity = result.estimatedQuantity
             calories = "\(result.calories)"
@@ -2885,6 +3793,21 @@ private struct TextAnalysisEntryView: View {
         } catch {
             phase = .error(error.localizedDescription)
         }
+    }
+
+    private var analysisDescription: String {
+        let trimmedFoodName = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedQuantity = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedFoodName.isEmpty {
+            return description
+        }
+
+        if trimmedQuantity.isEmpty {
+            return trimmedFoodName
+        }
+
+        return "\(trimmedQuantity) of \(trimmedFoodName)"
     }
 
     private func save() {
@@ -2938,10 +3861,10 @@ private struct MealEditor: View {
     var body: some View {
         VStack(spacing: 16) {
             GroupBox("Food") {
-                VStack(spacing: 10) {
-                    editorRow("Name", text: $foodName)
+                VStack(alignment: .leading, spacing: 12) {
+                    expandingEditor("Food name", text: $foodName, lineLimit: 2...4)
                     Divider()
-                    editorRow("Serving", text: $quantity)
+                    expandingEditor("Serving / quantity", text: $quantity, lineLimit: 2...6)
                 }
             }
             .padding(.horizontal)
@@ -2970,13 +3893,15 @@ private struct MealEditor: View {
         }
     }
 
-    private func editorRow(_ label: String, text: Binding<String>) -> some View {
-        HStack {
+    private func expandingEditor(_ label: String, text: Binding<String>, lineLimit: ClosedRange<Int>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 72, alignment: .leading)
             TextField(label, text: text)
-                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -3453,17 +4378,30 @@ private struct MacroChip: View {
 private struct ActionButtonLabel: View {
     let title: String
     let systemImage: String
-    let fill: Color
-    let foreground: Color
+    var fill: Color? = nil
+    var foreground: Color = .green
 
     var body: some View {
-        Label(title, systemImage: systemImage)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(fill)
-            .foregroundStyle(foreground)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .font(.headline)
+        VStack(spacing: 7) {
+            ZStack {
+                Circle()
+                    .fill(foreground.opacity(0.12))
+                    .frame(width: 40, height: 40)
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(foreground)
+            }
+
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.primary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 78)
+        .padding(.horizontal, 4)
     }
 }
 
@@ -3824,9 +4762,9 @@ private enum RecommendedTargets {
         let safeWeight = max(weightKg ?? 70, 35)
 
         switch stage {
-        case .notSpecified, .stage1to2:
+        case .notSpecified, .stage1, .stage2, .stage3a:
             return safeWeight * 0.8
-        case .stage3to4, .stage5NotDialysis:
+        case .stage3b, .stage4, .stage3to4, .stage5NotDialysis:
             return safeWeight * 0.7
         case .dialysis:
             return safeWeight * 1.2
@@ -3835,18 +4773,22 @@ private enum RecommendedTargets {
 
     static func defaultPotassiumMg(for stage: CKDStage) -> Double {
         switch stage {
-        case .notSpecified, .stage1to2:
+        case .notSpecified, .stage1, .stage2:
             return 4700
-        case .stage3to4, .stage5NotDialysis, .dialysis:
+        case .stage3a:
+            return 3500
+        case .stage3b, .stage4, .stage3to4, .stage5NotDialysis, .dialysis:
             return 3000
         }
     }
 
     static func defaultPhosphorusMg(for stage: CKDStage) -> Double {
         switch stage {
-        case .notSpecified, .stage1to2:
+        case .notSpecified, .stage1, .stage2:
             return 1000
-        case .stage3to4, .stage5NotDialysis, .dialysis:
+        case .stage3a:
+            return 900
+        case .stage3b, .stage4, .stage3to4, .stage5NotDialysis, .dialysis:
             return 800
         }
     }
@@ -3862,6 +4804,7 @@ private enum AIProvider: String, CaseIterable, Identifiable {
     case gemini
     case openAI
     case openRouter
+    case cloudflare
 
     var id: String { rawValue }
 
@@ -3871,6 +4814,7 @@ private enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "Google Gemini"
         case .openAI: return "OpenAI"
         case .openRouter: return "OpenRouter"
+        case .cloudflare: return "MealVue AI"
         }
     }
 }
@@ -3974,15 +4918,19 @@ private struct OpenRouterModel: Identifiable, Hashable, RankedAIModel {
     )
 
     static let recommended: [OpenRouterModel] = [
-        .autoRouter,
-        OpenRouterModel(id: "anthropic/claude-opus-4.5", displayName: "Claude Opus 4.5", supportsVision: true, isRouter: false),
-        OpenRouterModel(id: "anthropic/claude-sonnet-4.6", displayName: "Claude Sonnet 4.6", supportsVision: true, isRouter: false),
-        OpenRouterModel(id: "anthropic/claude-sonnet-4.5", displayName: "Claude Sonnet 4.5", supportsVision: true, isRouter: false),
+        .freeRouter,
+        // Best for food image analysis - fast, accurate vision, low cost
         OpenRouterModel(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "google/gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash-Lite", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "openai/gpt-4o-mini", displayName: "GPT-4o Mini", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "anthropic/claude-haiku-4.5", displayName: "Claude Haiku 4.5", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "google/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", supportsVision: true, isRouter: false),
+        // Premium options
+        OpenRouterModel(id: "anthropic/claude-sonnet-4.6", displayName: "Claude Sonnet 4.6", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "anthropic/claude-sonnet-4.5", displayName: "Claude Sonnet 4.5", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "anthropic/claude-opus-4.5", displayName: "Claude Opus 4.5", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "openai/gpt-5.5", displayName: "GPT-5.5", supportsVision: true, isRouter: false),
-        .freeRouter
+        .autoRouter
     ]
 }
 
@@ -4031,7 +4979,7 @@ private enum Config {
     private static let defaults = UserDefaults.standard
 
     static var selectedProvider: AIProvider {
-        AIProvider(rawValue: defaults.string(forKey: "aiProvider") ?? "") ?? .anthropic
+        AIProvider(rawValue: defaults.string(forKey: "aiProvider") ?? "") ?? .cloudflare
     }
 
     static var anthropicAPIKey: String {
@@ -4065,9 +5013,13 @@ private enum Config {
         defaults.string(forKey: "openRouterAPIKey") ?? ""
     }
 
+    static var mealvueClientToken: String {
+        defaults.string(forKey: "mealvueClientToken") ?? ""
+    }
+
     static var openRouterModelID: String {
         let saved = defaults.string(forKey: "openRouterModelID") ?? ""
-        return saved.isEmpty ? OpenRouterModel.autoRouter.id : saved
+        return saved.isEmpty ? OpenRouterModel.freeRouter.id : saved
     }
 
     static var isConfigured: Bool {
@@ -4080,6 +5032,8 @@ private enum Config {
             return !openAIAPIKey.isEmpty
         case .openRouter:
             return !openRouterAPIKey.isEmpty
+        case .cloudflare:
+            return true
         }
     }
 
@@ -4100,6 +5054,7 @@ private enum ClaudeService {
     private static let openAIModelsURL = URL(string: "https://api.openai.com/v1/models")!
     private static let openRouterChatURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
     private static let openRouterModelsURL = URL(string: "https://openrouter.ai/api/v1/models")!
+    private static let mealvueWorkerURL = URL(string: "https://mealvue-ai-backend.cryptobkk.workers.dev/v1/analyze")!
 
     static func analyzeFood(image: UIImage) async throws -> NutritionResult {
         switch Config.selectedProvider {
@@ -4111,6 +5066,8 @@ private enum ClaudeService {
             return try await analyzeFoodWithOpenAI(image: image)
         case .openRouter:
             return try await analyzeFoodWithOpenRouter(image: image)
+        case .cloudflare:
+            return try await analyzeFoodWithCloudflare(image: image)
         }
     }
 
@@ -4124,6 +5081,8 @@ private enum ClaudeService {
             return try await analyzeFoodWithOpenAI(image: image, correctedDescription: correctedDescription)
         case .openRouter:
             return try await analyzeFoodWithOpenRouter(image: image, correctedDescription: correctedDescription)
+        case .cloudflare:
+            return try await analyzeFoodWithCloudflare(image: image, correctedDescription: correctedDescription)
         }
     }
 
@@ -4137,6 +5096,8 @@ private enum ClaudeService {
             return try await analyzeTextWithOpenAI(description: description)
         case .openRouter:
             return try await analyzeTextWithOpenRouter(description: description)
+        case .cloudflare:
+            return try await analyzeTextWithCloudflare(description: description)
         }
     }
 
@@ -4656,6 +5617,84 @@ private enum ClaudeService {
         return try await requestOpenRouterResult(body: body)
     }
 
+    private static func analyzeFoodWithCloudflare(image: UIImage) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 960)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.55) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "mode": "image",
+            "provider": "cloudflare",
+            "mimeType": "image/jpeg",
+            "imageBase64": jpeg.base64EncodedString()
+        ]
+
+        return try await requestCloudflareResult(body: body)
+    }
+
+    private static func analyzeFoodWithCloudflare(image: UIImage, correctedDescription: String) async throws -> NutritionResult {
+        let resized = resize(image, maxDimension: 960)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.55) else {
+            throw ClaudeError.imageEncodingFailed
+        }
+
+        let body: [String: Any] = [
+            "mode": "image",
+            "provider": "cloudflare",
+            "mimeType": "image/jpeg",
+            "imageBase64": jpeg.base64EncodedString(),
+            "description": correctedDescription
+        ]
+
+        return try await requestCloudflareResult(body: body)
+    }
+
+    private static func analyzeTextWithCloudflare(description: String) async throws -> NutritionResult {
+        let body: [String: Any] = [
+            "mode": "text",
+            "provider": "cloudflare",
+            "description": description
+        ]
+
+        return try await requestCloudflareResult(body: body)
+    }
+
+    private static func requestCloudflareResult(body: [String: Any]) async throws -> NutritionResult {
+        var request = URLRequest(url: mealvueWorkerURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let token = Config.mealvueClientToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            if (error as NSError).code == NSURLErrorTimedOut {
+                throw ClaudeError.apiError(NSURLErrorTimedOut, "MealVue AI timed out. Try again in a moment.")
+            }
+            throw error
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            throw ClaudeError.apiError(http.statusCode, summarizedResponseBody(data))
+        }
+
+        return try parseBackendNutrition(data)
+    }
+
     private static func requestAnthropicResult(body: [String: Any], providerName: String, modelUsed: String) async throws -> NutritionResult {
         guard !Config.anthropicAPIKey.isEmpty else {
             throw ClaudeError.missingAPIKey
@@ -5029,6 +6068,60 @@ private enum ClaudeService {
         return String(trimmed.prefix(600)) + "..."
     }
 
+    private static func parseBackendNutrition(_ data: Data) throws -> NutritionResult {
+        let json: [String: Any]
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw ClaudeError.parseError
+            }
+            json = object
+        } catch {
+            throw ClaudeError.parseError
+        }
+
+        if let error = json["error"] as? String {
+            throw ClaudeError.apiError(502, error)
+        }
+
+        func string(_ key: String) -> String {
+            (json[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func double(_ key: String) -> Double {
+            if let value = json[key] as? Double { return value }
+            if let value = json[key] as? Int { return Double(value) }
+            return 0
+        }
+
+        func int(_ key: String) -> Int {
+            if let value = json[key] as? Int { return value }
+            if let value = json[key] as? Double { return Int(value) }
+            return 0
+        }
+
+        return NutritionResult(
+            foodName: string("food_name").isEmpty ? "Unknown food" : string("food_name"),
+            estimatedQuantity: string("estimated_quantity"),
+            calories: int("calories"),
+            proteinG: double("protein_g"),
+            carbsG: double("carbs_g"),
+            fatG: double("fat_g"),
+            fiberG: double("fiber_g"),
+            sodiumMg: double("sodium_mg"),
+            potassiumMg: double("potassium_mg"),
+            phosphorusMg: double("phosphorus_mg"),
+            confidence: string("confidence").isEmpty ? "medium" : string("confidence"),
+            notes: string("notes"),
+            kidneyWarning: string("kidney_warning"),
+            heartWarning: string("heart_warning"),
+            sodiumWarning: string("sodium_warning"),
+            potassiumWarning: string("potassium_warning"),
+            phosphorusWarning: string("phosphorus_warning"),
+            providerName: AIProvider.cloudflare.displayName,
+            modelUsed: "cloudflare-workers-ai"
+        )
+    }
+
     private static func parse(_ text: String, providerName: String, modelUsed: String) throws -> NutritionResult {
         guard let start = text.firstIndex(of: "{"),
               let end = text.lastIndex(of: "}") else {
@@ -5232,6 +6325,8 @@ private enum ClaudeError: LocalizedError {
                 return "Add your OpenAI API key in Settings."
             case .openRouter:
                 return "Add your OpenRouter API key in Settings."
+            case .cloudflare:
+                return "MealVue AI is not available. Try again later or use manual entry."
             }
         case .imageEncodingFailed:
             return "Could not encode image."
@@ -5246,6 +6341,15 @@ private enum ClaudeError: LocalizedError {
             }
             if code == 402 {
                 return "API error 402. This model may require payment or credits on the current provider."
+            }
+            if code == 429 {
+                return "AI rate limit reached. Wait a moment and try again, or switch to another model/provider."
+            }
+            if body.localizedCaseInsensitiveContains("does not support image") ||
+                body.localizedCaseInsensitiveContains("vision") ||
+                body.localizedCaseInsensitiveContains("multimodal") ||
+                body.localizedCaseInsensitiveContains("incompatible") {
+                return "The selected AI model is not compatible with food photos. Choose a vision-compatible model or use MealVue AI."
             }
             if body.isEmpty {
                 return "API error \(code)."

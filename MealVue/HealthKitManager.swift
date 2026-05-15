@@ -19,6 +19,7 @@ final class HealthKitManager {
 
     private let healthStore = HKHealthStore()
     private let nutritionIdentifiers: [HKQuantityTypeIdentifier] = [
+        .dietaryEnergyConsumed,
         .dietaryFiber,
         .dietaryProtein,
         .dietarySodium,
@@ -183,6 +184,13 @@ final class HealthKitManager {
                         endDate: endDate,
                         healthStore: healthStore
                     )
+                    async let calories = Self.fetchCumulativeValue(
+                        for: .dietaryEnergyConsumed,
+                        unit: .largeCalorie(),
+                        startDate: date,
+                        endDate: endDate,
+                        healthStore: healthStore
+                    )
                     async let fiber = Self.fetchCumulativeValue(
                         for: .dietaryFiber,
                         unit: .gram(),
@@ -217,6 +225,7 @@ final class HealthKitManager {
                     return HealthNutritionDay(
                         date: date,
                         summary: HealthNutritionSummary(
+                            calories: try await calories,
                             proteinG: try await protein,
                             fiberG: try await fiber,
                             sodiumMg: try await sodium,
@@ -510,6 +519,7 @@ struct HealthNutritionDay: Identifiable {
 }
 
 struct HealthNutritionSummary {
+    let calories: Double
     let proteinG: Double
     let fiberG: Double
     let sodiumMg: Double
@@ -517,6 +527,7 @@ struct HealthNutritionSummary {
     let phosphorusMg: Double
 
     static let zero = HealthNutritionSummary(
+        calories: 0,
         proteinG: 0,
         fiberG: 0,
         sodiumMg: 0,
@@ -542,6 +553,7 @@ struct HealthTrendsView: View {
         let recentEntries = entries.filter { $0.timestamp >= cutoff }
 
         return HealthNutritionSummary(
+            calories: Double(recentEntries.reduce(0) { $0 + $1.calories }),
             proteinG: recentEntries.reduce(0) { $0 + $1.proteinG },
             fiberG: recentEntries.reduce(0) { $0 + $1.fiberG },
             sodiumMg: recentEntries.reduce(0) { $0 + $1.sodiumMg },
@@ -587,19 +599,11 @@ struct HealthTrendsView: View {
                 }
 
                 Section("Today In Apple Health") {
-                    HealthSummaryRow(title: "Protein", value: valueText(healthKitManager.snapshot.todayNutrition.proteinG, suffix: "g"))
-                    HealthSummaryRow(title: "Fiber", value: valueText(healthKitManager.snapshot.todayNutrition.fiberG, suffix: "g"))
-                    HealthSummaryRow(title: "Sodium", value: valueText(healthKitManager.snapshot.todayNutrition.sodiumMg, suffix: "mg"))
-                    HealthSummaryRow(title: "Potassium", value: valueText(healthKitManager.snapshot.todayNutrition.potassiumMg, suffix: "mg"))
-                    HealthSummaryRow(title: "Phosphorus", value: valueText(healthKitManager.snapshot.todayNutrition.phosphorusMg, suffix: "mg"))
+                    HealthMetricGrid(summary: healthKitManager.snapshot.todayNutrition, valueText: valueText)
                 }
 
                 Section("MealVue Last 7 Days") {
-                    HealthSummaryRow(title: "Protein", value: valueText(recentMealVueSummary.proteinG, suffix: "g"))
-                    HealthSummaryRow(title: "Fiber", value: valueText(recentMealVueSummary.fiberG, suffix: "g"))
-                    HealthSummaryRow(title: "Sodium", value: valueText(recentMealVueSummary.sodiumMg, suffix: "mg"))
-                    HealthSummaryRow(title: "Potassium", value: valueText(recentMealVueSummary.potassiumMg, suffix: "mg"))
-                    HealthSummaryRow(title: "Phosphorus", value: valueText(recentMealVueSummary.phosphorusMg, suffix: "mg"))
+                    HealthMetricGrid(summary: recentMealVueSummary, valueText: valueText)
                 }
 
                 Section("Health Nutrition Trend") {
@@ -612,13 +616,7 @@ struct HealthTrendsView: View {
                                 Text(day.date.formatted(date: .abbreviated, time: .omitted))
                                     .font(.headline)
 
-                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                                    HealthMetricChip(title: "Protein", value: valueText(day.summary.proteinG, suffix: "g"), tint: .blue)
-                                    HealthMetricChip(title: "Fiber", value: valueText(day.summary.fiberG, suffix: "g"), tint: .green)
-                                    HealthMetricChip(title: "Sodium", value: valueText(day.summary.sodiumMg, suffix: "mg"), tint: .orange)
-                                    HealthMetricChip(title: "Potassium", value: valueText(day.summary.potassiumMg, suffix: "mg"), tint: .yellow)
-                                    HealthMetricChip(title: "Phosphorus", value: valueText(day.summary.phosphorusMg, suffix: "mg"), tint: .purple)
-                                }
+                                HealthMetricGrid(summary: day.summary, valueText: valueText)
                             }
                             .padding(.vertical, 4)
                         }
@@ -678,16 +676,18 @@ struct HealthTrendsView: View {
     }
 }
 
-private struct HealthSummaryRow: View {
-    let title: String
-    let value: String
+private struct HealthMetricGrid: View {
+    let summary: HealthNutritionSummary
+    let valueText: (Double, String) -> String
 
     var body: some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.green)
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+            HealthMetricChip(title: "Calories", value: valueText(summary.calories, "kcal"), tint: .green)
+            HealthMetricChip(title: "Protein", value: valueText(summary.proteinG, "g"), tint: .blue)
+            HealthMetricChip(title: "Fiber", value: valueText(summary.fiberG, "g"), tint: .green)
+            HealthMetricChip(title: "Sodium", value: valueText(summary.sodiumMg, "mg"), tint: .orange)
+            HealthMetricChip(title: "Potassium", value: valueText(summary.potassiumMg, "mg"), tint: .yellow)
+            HealthMetricChip(title: "Phosphorus", value: valueText(summary.phosphorusMg, "mg"), tint: .purple)
         }
     }
 }

@@ -82,8 +82,6 @@ struct NutrientRingView: View {
 struct NutrientRingsView: View {
     let proteinG: Double
     let proteinTarget: Double
-    let fiberG: Double
-    let fiberTarget: Double?
     let sodiumMg: Double
     let sodiumTarget: Double
     let potassiumMg: Double
@@ -105,15 +103,6 @@ struct NutrientRingsView: View {
                 size: 110
             )
 
-            NutrientRingView(
-                title: "Fiber",
-                current: fiberG,
-                target: fiberTarget,
-                unit: "g",
-                color: .green,
-                size: 110
-            )
-            
             NutrientRingView(
                 title: "Sodium",
                 current: sodiumMg,
@@ -150,8 +139,6 @@ struct NutrientRingsView: View {
         NutrientRingsView(
             proteinG: 65,
             proteinTarget: 80,
-            fiberG: 25,
-            fiberTarget: 30,
             sodiumMg: 1800,
             sodiumTarget: 2000,
             potassiumMg: 2500,
