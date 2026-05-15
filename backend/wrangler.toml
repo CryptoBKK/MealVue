@@ -3,8 +3,8 @@ main = "src/index.ts"
 compatibility_date = "2026-05-14"
 
 [vars]
-DEFAULT_PROVIDER = "cloudflare"
-# Primary vision model: llama-4-scout is the most capable Cloudflare vision model (17B, multimodal)
+DEFAULT_PROVIDER = "gemini"
+# Cloudflare vision model (position #3 in fallback chain)
 CLOUDFLARE_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
 # Fallback vision models for food image analysis (ordered by preference)
 CLOUDFLARE_IMAGE_MODELS = "@cf/meta/llama-4-scout-17b-16e-instruct,@cf/google/gemma-4-26b-a4b-it,@cf/google/gemma-3-12b-it,@cf/mistralai/mistral-small-3.1-24b-instruct"

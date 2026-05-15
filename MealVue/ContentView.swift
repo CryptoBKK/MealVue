@@ -4843,8 +4843,8 @@ private struct GeminiModel: Identifiable, Hashable, RankedAIModel {
     let displayName: String
 
     static let defaults: [GeminiModel] = [
-        GeminiModel(id: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash"),
         GeminiModel(id: "gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash-Lite"),
+        GeminiModel(id: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash"),
         GeminiModel(id: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro")
     ]
 
@@ -4920,8 +4920,8 @@ private struct OpenRouterModel: Identifiable, Hashable, RankedAIModel {
     static let recommended: [OpenRouterModel] = [
         .freeRouter,
         // Best for food image analysis - fast, accurate vision, low cost
-        OpenRouterModel(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "google/gemini-2.5-flash-lite", displayName: "Gemini 2.5 Flash-Lite", supportsVision: true, isRouter: false),
+        OpenRouterModel(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "openai/gpt-4o-mini", displayName: "GPT-4o Mini", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "anthropic/claude-haiku-4.5", displayName: "Claude Haiku 4.5", supportsVision: true, isRouter: false),
         OpenRouterModel(id: "google/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", supportsVision: true, isRouter: false),

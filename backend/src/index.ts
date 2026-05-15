@@ -252,24 +252,31 @@ function buildFallbackChain(
 ): FallbackEntry[] {
   const chain: FallbackEntry[] = [];
 
-  // Always try the requested provider first
-  chain.push({ provider: requestedProvider, model });
+  // If user explicitly requested a provider, try it first
+  const explicitProvider = body.provider != null;
 
-  // If the requested provider is not already Gemini Flash-Lite, add it as fallback
+  if (explicitProvider) {
+    chain.push({ provider: requestedProvider, model });
+  }
+
+  // Default chain (or fallback for explicit requests): Gemini Flash-Lite → Gemini Flash → Cloudflare → OpenRouter
   const flashLiteModel = env.GEMINI_FALLBACK_MODEL || "gemini-2.5-flash-lite";
-  if (requestedProvider !== "gemini" || model !== flashLiteModel) {
+  if (!explicitProvider || requestedProvider !== "gemini" || model !== flashLiteModel) {
     chain.push({ provider: "gemini", model: flashLiteModel });
   }
 
-  // If the requested provider is not already Gemini Flash, add it as fallback
   const flashModel = env.GEMINI_MODEL || "gemini-2.5-flash";
-  if (requestedProvider !== "gemini" || model !== flashModel) {
+  if (!explicitProvider || requestedProvider !== "gemini" || model !== flashModel) {
     chain.push({ provider: "gemini", model: flashModel });
   }
 
-  // If the requested provider is not already OpenRouter, add it as last resort
+  const cfModel = env.CLOUDFLARE_MODEL || "@cf/meta/llama-4-scout-17b-16e-instruct";
+  if (!explicitProvider || requestedProvider !== "cloudflare") {
+    chain.push({ provider: "cloudflare", model: cfModel });
+  }
+
   const orModel = env.OPENROUTER_MODEL || "openrouter/free";
-  if (requestedProvider !== "openrouter") {
+  if (!explicitProvider || requestedProvider !== "openrouter") {
     chain.push({ provider: "openrouter", model: orModel });
   }
 
